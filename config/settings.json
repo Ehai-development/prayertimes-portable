@@ -11,6 +11,7 @@
   "layout_style": "moon",
   "ticker_enabled": "yes",
   "ticker_speed": 5,
+  "athanblinkingduration": 15,
   "prayernow": 3,
   "testing": {
     "enabled": false,

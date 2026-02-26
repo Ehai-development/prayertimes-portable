@@ -878,6 +878,14 @@ class IslamicBackground:
             prayernow_minutes = 3
         self.config['prayernow'] = prayernow_minutes
         self.iqamah_post_duration_seconds = prayernow_minutes * 60
+
+        # Athan prayer-box blinking duration in seconds (0 disables blinking)
+        try:
+            athan_blink_duration = int(self.config.get('athanblinkingduration', 15))
+            athan_blink_duration = max(0, athan_blink_duration)
+        except:
+            athan_blink_duration = 15
+        self.config['athanblinkingduration'] = athan_blink_duration
         
         # Load location/address from address.txt if available
         address_path = config_dir / 'address.txt'
@@ -1459,6 +1467,33 @@ class IslamicBackground:
                 'in_text': ' IN ',
                 'countdown_text': '--:--:--'
             }
+
+    def get_athan_blink_state(self, prayers_data):
+        """Return (prayer_name, blink_visible) during athan blink window, else (None, False)."""
+        try:
+            duration_seconds = int(self.config.get('athanblinkingduration', 15))
+            if duration_seconds <= 0 or not prayers_data:
+                return None, False
+
+            current_date = self.get_current_date()
+            now_dt = datetime.combine(current_date, self.get_current_time())
+
+            for prayer_name in ['Fajr', 'Duhr', 'Asr', 'Maghrib', 'Isha']:
+                athan_time = self.parse_time(prayers_data.get(f'{prayer_name}Athan', ''))
+                if not athan_time:
+                    continue
+
+                athan_dt = datetime.combine(current_date, athan_time)
+                elapsed = (now_dt - athan_dt).total_seconds()
+
+                # Blink only for configured duration from athan time (one window per prayer)
+                if 0 <= elapsed < duration_seconds:
+                    blink_visible = (int(elapsed) % 2 == 0)  # Toggle every 1 sec (matches update loop)
+                    return prayer_name, blink_visible
+        except:
+            pass
+
+        return None, False
     
     def schedule_countdown_update(self):
         """Schedule the countdown update to run every second"""
@@ -1490,11 +1525,13 @@ class IslamicBackground:
                     if self.last_rendered_current_prayer is None:
                         self.last_rendered_current_prayer = current_prayer_now
 
+                    blinking_prayer, blink_visible = self.get_athan_blink_state(prayers_data)
+
                     if current_prayer_now != self.last_rendered_current_prayer:
                         self.last_rendered_current_prayer = current_prayer_now
-                        self.update_prayer_box_highlight_states(current_prayer_now)
+                        self.update_prayer_box_highlight_states(current_prayer_now, blinking_prayer, blink_visible)
                     elif not self.iqamah_overlay_visible:
-                        self.update_prayer_box_highlight_states(current_prayer_now)
+                        self.update_prayer_box_highlight_states(current_prayer_now, blinking_prayer, blink_visible)
 
                     display_data = self.get_next_line_display_data(prayers_data)
                     prefix_text = display_data['prefix_text']
@@ -2575,46 +2612,35 @@ class IslamicBackground:
             )
 
             center_x = x + (width / 2)
-            line1_y = y + (height * 0.24)
-            line2_y = y + (height * 0.44)
-            line3_y = y + (height * 0.63)
-            line4_y = y + (height * 0.81)
+            line1_y = y + (height * 0.26)
+            line2_y = y + (height * 0.56)
+            line3_y = y + (height * 0.82)
 
             # Line 1: Prayer name
             self.canvas.create_text(
                 center_x, line1_y,
-                text=name,
-                font=('Arial', self.fs(30, 15), 'bold'),
+                text=name.upper(),
+                font=('Arial', self.fs(62, 31), 'bold'),
                 fill='black',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
             )
 
-            # Line 2: Iqamah label
+            # Line 2: New time
             self.canvas.create_text(
                 center_x, line2_y,
-                text='IQAMAH CHANGES TO',
-                font=('Arial', self.fs(20, 10), 'bold'),
-                fill='black',
-                tags=('prayer_change_ribbon',),
-                state=ribbon_state
-            )
-
-            # Line 3: New time
-            self.canvas.create_text(
-                center_x, line3_y,
                 text=tomorrow_iqamah,
-                font=('Arial', self.fs(38, 18), 'bold'),
+                font=('Arial', self.fs(54, 27), 'bold'),
                 fill='#ff0000',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
             )
 
-            # Line 4: Starts tomorrow
+            # Line 3: Tomorrow
             self.canvas.create_text(
-                center_x, line4_y,
-                text='STARTS TOMORROW',
-                font=('Arial', self.fs(20, 10), 'bold'),
+                center_x, line3_y,
+                text='TOMORROW',
+                font=('Arial', self.fs(34, 17), 'bold'),
                 fill='#ff0000',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
@@ -2625,11 +2651,16 @@ class IslamicBackground:
         # So we just remove this block completely from here
         return box_shape_id
 
-    def update_prayer_box_highlight_states(self, current_prayer):
+    def update_prayer_box_highlight_states(self, current_prayer, blinking_prayer=None, blink_visible=True):
         """Update only prayer box highlight styles without full-canvas redraw."""
         for prayer_key, shape_id in self.prayer_box_shape_ids.items():
             try:
-                if prayer_key == current_prayer:
+                if prayer_key == blinking_prayer:
+                    if blink_visible:
+                        self.canvas.itemconfig(shape_id, fill='#ffb74d', outline='#f57c00', width=4)
+                    else:
+                        self.canvas.itemconfig(shape_id, fill='white', outline='#2a5a8f', width=3)
+                elif prayer_key == current_prayer:
                     self.canvas.itemconfig(shape_id, fill='#ffb74d', outline='#f57c00', width=4)
                 else:
                     self.canvas.itemconfig(shape_id, fill='white', outline='#2a5a8f', width=3)
