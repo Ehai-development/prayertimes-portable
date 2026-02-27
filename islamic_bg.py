@@ -126,6 +126,8 @@ class IslamicBackground:
         self.next_prayer_static_width = None
         self._next_prayer_last_text_parts = None
         self._next_prayer_last_widths = (0, 0, 0, 0)
+        self.build_info_text_id = None
+        self.build_info_text = self.get_build_info_text()
         self.last_rendered_current_prayer = None
         self._last_transition_redraw_at = None
         self._transition_redraw_pending = False
@@ -1265,6 +1267,15 @@ class IslamicBackground:
             12: "Dhu al-Hijjah"
         }
         return hijri_months.get(month_number, str(month_number))
+
+    def get_build_info_text(self):
+        """Return build timestamp text for display."""
+        try:
+            build_source = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__)
+            build_dt = datetime.fromtimestamp(build_source.stat().st_mtime)
+            return f"Build: {build_dt.strftime('%Y-%m-%d %I:%M %p')}"
+        except Exception:
+            return "Build: Unknown"
     
     def get_current_prayer(self, prayers_data):
         """Determine which prayer time period we are currently in"""
@@ -2459,6 +2470,8 @@ class IslamicBackground:
             current_time_y = jummah_bottom_y - (next_prayer_panel_offset_y + next_prayer_panel_height) - self.us(0, 0)
 
             self.draw_current_time_display(current_time_x, current_time_y, next_prayer_name_for_display)
+
+        self.draw_build_info(width, height)
     
     def draw_prayer_box(self, x, y, width, height, name, arabic, athan, iqamah, is_current=False, show_tomorrow_iqamah=False, prayer_key=None, tomorrow_iqamah=None):
         """Draw a single prayer time box with rounded corners"""
@@ -2903,6 +2916,17 @@ class IslamicBackground:
             font=line_font,
             fill='#2E7D32',
             anchor='w'
+        )
+
+    def draw_build_info(self, width, height):
+        """Draw app build date/time in the bottom-left corner."""
+        self.build_info_text_id = self.canvas.create_text(
+            self.us(14, 8),
+            height - self.us(10, 6),
+            text=self.build_info_text,
+            font=('Arial', self.fs(18, 10)),
+            fill='white',
+            anchor='sw'
         )
     
     def schedule_prayer_time_toggle(self):
