@@ -6,9 +6,11 @@ $APP_EXE = "C:\portable\standalone\PrayerTimeDisplay.exe"
 $LOG_FILE = "C:\portable\startupscripts\app_monitor.log"
 
 $GITHUB_OWNER = "Ehai-development"
-$GITHUB_REPO = "prayertimes"
+$GITHUB_REPO = "prayertimes-portable"
 $GITHUB_BRANCH = "main"
 $GITHUB_TOKEN_FILE = Join-Path (Split-Path -Parent $PSCommandPath) "github_token.txt"
+$REPO_CONTENT_PREFIX = ""
+$USE_GITHUB_TOKEN = $false
 
 $PORTABLE_ROOT = Split-Path -Parent (Split-Path -Parent $APP_EXE)
 $STATE_DIR = Join-Path $PORTABLE_ROOT ".update_state"
@@ -36,17 +38,19 @@ function Get-GitHubHeaders {
         "User-Agent" = "PrayerTimeMonitor"
         "Accept" = "application/vnd.github+json"
     }
-    $token = $env:GITHUB_TOKEN
-    if ([string]::IsNullOrWhiteSpace($token) -and (Test-Path $GITHUB_TOKEN_FILE)) {
-        try {
-            $token = (Get-Content -Path $GITHUB_TOKEN_FILE -ErrorAction SilentlyContinue | Select-Object -First 1)
-        } catch {
-            $token = $null
+    if ($USE_GITHUB_TOKEN) {
+        $token = $env:GITHUB_TOKEN
+        if ([string]::IsNullOrWhiteSpace($token) -and (Test-Path $GITHUB_TOKEN_FILE)) {
+            try {
+                $token = (Get-Content -Path $GITHUB_TOKEN_FILE -ErrorAction SilentlyContinue | Select-Object -First 1)
+            } catch {
+                $token = $null
+            }
         }
-    }
 
-    if (-not [string]::IsNullOrWhiteSpace($token)) {
-        $headers["Authorization"] = "Bearer $($token.Trim())"
+        if (-not [string]::IsNullOrWhiteSpace($token)) {
+            $headers["Authorization"] = "token $($token.Trim())"
+        }
     }
     return $headers
 }
@@ -111,7 +115,16 @@ function Get-ChangedPortableFiles {
         return @()
     }
 
-    return @($response.files | Where-Object { $_.filename -like 'portable/*' })
+    if ([string]::IsNullOrWhiteSpace($REPO_CONTENT_PREFIX)) {
+        return @($response.files)
+    }
+
+    $prefix = $REPO_CONTENT_PREFIX
+    if (-not $prefix.EndsWith('/')) {
+        $prefix = "$prefix/"
+    }
+
+    return @($response.files | Where-Object { $_.filename -like "$prefix*" })
 }
 
 function Get-LocalPortableCommitSha {
@@ -147,6 +160,11 @@ function Should-PreservePath {
     param([string]$RelativePath)
 
     $normalized = ($RelativePath -replace '/', '\\').ToLowerInvariant()
+
+    if ($normalized -eq 'config\\announcements.txt' -or $normalized -eq 'config\\ramadhanannouncements.txt') {
+        return $false
+    }
+
     return ($normalized -like 'config\\*' -or $normalized -like 'data\\*' -or $normalized -like '.update_state\\*')
 }
 
@@ -165,11 +183,29 @@ function Sync-ChangedPortableFilesFromGitHub {
 
     foreach ($file in $ChangedFiles) {
         $repoPath = [string]$file.filename
-        if (-not $repoPath.StartsWith('portable/')) {
+        if ([string]::IsNullOrWhiteSpace($repoPath)) {
             continue
         }
 
-        $relativePath = $repoPath.Substring('portable/'.Length)
+        $relativePath = $repoPath
+        if (-not [string]::IsNullOrWhiteSpace($REPO_CONTENT_PREFIX)) {
+            $prefix = $REPO_CONTENT_PREFIX
+            if (-not $prefix.EndsWith('/')) {
+                $prefix = "$prefix/"
+            }
+
+            if (-not $repoPath.StartsWith($prefix)) {
+                continue
+            }
+
+            $relativePath = $repoPath.Substring($prefix.Length)
+        }
+
+        $relativePath = $relativePath.TrimStart('/')
+        if ([string]::IsNullOrWhiteSpace($relativePath)) {
+            continue
+        }
+
         if (Should-PreservePath -RelativePath $relativePath) {
             Write-Log "Skipping preserved path: $repoPath"
             continue
@@ -189,14 +225,31 @@ function Sync-ChangedPortableFilesFromGitHub {
 
         if ($status -eq 'renamed' -and $file.previous_filename) {
             $oldRepoPath = [string]$file.previous_filename
-            if ($oldRepoPath.StartsWith('portable/')) {
-                $oldRelative = $oldRepoPath.Substring('portable/'.Length)
-                if (-not (Should-PreservePath -RelativePath $oldRelative)) {
-                    $oldTarget = Join-Path $PORTABLE_ROOT ($oldRelative -replace '/', '\\')
-                    if (Test-Path $oldTarget) {
-                        Remove-Item -Path $oldTarget -Force -ErrorAction SilentlyContinue
-                        Write-Log "Removed renamed old file: $oldRelative"
-                        $anyApplied = $true
+            if (-not [string]::IsNullOrWhiteSpace($oldRepoPath)) {
+                $oldRelative = $oldRepoPath
+
+                if (-not [string]::IsNullOrWhiteSpace($REPO_CONTENT_PREFIX)) {
+                    $prefix = $REPO_CONTENT_PREFIX
+                    if (-not $prefix.EndsWith('/')) {
+                        $prefix = "$prefix/"
+                    }
+
+                    if (-not $oldRepoPath.StartsWith($prefix)) {
+                        $oldRelative = $null
+                    } else {
+                        $oldRelative = $oldRepoPath.Substring($prefix.Length)
+                    }
+                }
+
+                if (-not [string]::IsNullOrWhiteSpace($oldRelative)) {
+                    $oldRelative = $oldRelative.TrimStart('/')
+                    if (-not (Should-PreservePath -RelativePath $oldRelative)) {
+                        $oldTarget = Join-Path $PORTABLE_ROOT ($oldRelative -replace '/', '\\')
+                        if (Test-Path $oldTarget) {
+                            Remove-Item -Path $oldTarget -Force -ErrorAction SilentlyContinue
+                            Write-Log "Removed renamed old file: $oldRelative"
+                            $anyApplied = $true
+                        }
                     }
                 }
             }
