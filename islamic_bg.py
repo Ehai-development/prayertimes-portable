@@ -1271,6 +1271,21 @@ class IslamicBackground:
         now = self.get_current_time()
         is_friday = (self.get_current_date().weekday() == 4)
 
+        if is_friday:
+            _, sunrise_time = self.resolve_sunrise_time(prayers_data)
+            asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
+            friday_duhr_start = self.parse_time('2:15 PM')
+            jummah_time = self.jummah_time or self.parse_time(prayers_data.get('DuhrIqama', ''))
+
+            if sunrise_time and jummah_time and sunrise_time <= now < jummah_time:
+                return 'Shrouq'
+
+            if jummah_time and friday_duhr_start and jummah_time <= now < friday_duhr_start:
+                return 'Jummah'
+
+            if friday_duhr_start and asr_athan and friday_duhr_start <= now < asr_athan:
+                return 'Duhr'
+
         # Current period boundaries by Athan-style starts, including Shrouq via Sunrise.
         # This keeps prayer highlighting consistent throughout each period.
         sunrise_value, sunrise_time = self.resolve_sunrise_time(prayers_data)
@@ -1310,19 +1325,24 @@ class IslamicBackground:
                     current_prayer = prayer_name
                     break
 
-        # Special Friday Jummah handling: between Jummah time and +45 minutes, show Jummah
-        if is_friday and current_prayer == 'Duhr' and self.jummah_time:
-            jummah_end_dt = datetime.combine(self.get_current_date(), self.jummah_time) + timedelta(minutes=45)
-            jummah_end_time = jummah_end_dt.time()
-            if self.jummah_time <= now < jummah_end_time:
-                return 'Jummah'
-        
         return current_prayer
     
     def get_next_prayer(self, prayers_data):
         """Get the next prayer and its Athan time"""
         current_time = self.get_current_time()  # Use mocked time if in TEST_MODE
         is_friday = (self.get_current_date().weekday() == 4)
+
+        if is_friday:
+            _, sunrise_time = self.resolve_sunrise_time(prayers_data)
+            jummah_time = self.jummah_time or self.parse_time(prayers_data.get('DuhrIqama', ''))
+            asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
+
+            if sunrise_time and jummah_time and sunrise_time <= current_time < jummah_time:
+                return 'Jummah', jummah_time
+
+            if jummah_time and asr_athan and jummah_time <= current_time < asr_athan:
+                return 'Asr', asr_athan
+
         midday_name = 'Jummah' if is_friday else 'Duhr'
 
         # Include Shrouq (Sunrise) in the prayer progression
