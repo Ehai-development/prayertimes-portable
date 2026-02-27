@@ -55,6 +55,37 @@ function Get-GitHubHeaders {
     return $headers
 }
 
+function Is-NetworkUnavailableError {
+    param([System.Exception]$Exception)
+
+    if ($null -eq $Exception) {
+        return $false
+    }
+
+    $current = $Exception
+    while ($null -ne $current) {
+        if ($current -is [System.Net.WebException]) {
+            switch ($current.Status) {
+                NameResolutionFailure { return $true }
+                ProxyNameResolutionFailure { return $true }
+                ConnectFailure { return $true }
+                Timeout { return $true }
+                SendFailure { return $true }
+                ReceiveFailure { return $true }
+            }
+        }
+
+        $message = [string]$current.Message
+        if ($message -match '(?i)(no such host is known|name or service not known|could not resolve|unable to connect|network is unreachable|connection.*(failed|refused|timed out)|temporarily unavailable)') {
+            return $true
+        }
+
+        $current = $current.InnerException
+    }
+
+    return $false
+}
+
 function Get-AppProcess {
     return Get-Process -Name $APP_NAME -ErrorAction SilentlyContinue
 }
@@ -161,11 +192,7 @@ function Should-PreservePath {
 
     $normalized = ($RelativePath -replace '/', '\\').ToLowerInvariant()
 
-    if ($normalized -eq 'config\\announcements.txt' -or $normalized -eq 'config\\ramadhanannouncements.txt') {
-        return $false
-    }
-
-    return ($normalized -like 'config\\*' -or $normalized -like 'data\\*' -or $normalized -like '.update_state\\*')
+    return ($normalized -like '.update_state\\*')
 }
 
 function Sync-ChangedPortableFilesFromGitHub {
@@ -292,6 +319,10 @@ function Check-And-ApplyUpdates {
         try {
             $changedFiles = Get-ChangedPortableFiles -BaseSha $localSha -HeadSha $remoteSha
         } catch {
+            if (Is-NetworkUnavailableError -Exception $_.Exception) {
+                return $false
+            }
+
             Write-Log "Compare failed for local SHA '$localSha'. Resetting state to remote SHA."
             Save-LocalPortableCommitSha -Sha $remoteSha
             return $false
@@ -316,6 +347,10 @@ function Check-And-ApplyUpdates {
         Write-Log "No applicable file changes were applied (all skipped/preserved)"
         return $false
     } catch {
+        if (Is-NetworkUnavailableError -Exception $_.Exception) {
+            return $false
+        }
+
         Write-Log "Update check/apply failed: $($_.Exception.Message)"
         Write-Log "If repository is private, set GITHUB_TOKEN env var or create token file: $GITHUB_TOKEN_FILE"
     }
