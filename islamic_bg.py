@@ -1269,11 +1269,25 @@ class IslamicBackground:
         return hijri_months.get(month_number, str(month_number))
 
     def get_build_info_text(self):
-        """Return build timestamp text for display."""
+        """Return build timestamp text for display from config/lastupdate.tx."""
         try:
+            config_dir = self.get_config_dir()
+            last_update_path = config_dir / 'lastupdate.tx'
+
             build_source = Path(sys.executable) if getattr(sys, 'frozen', False) else Path(__file__)
-            build_dt = datetime.fromtimestamp(build_source.stat().st_mtime)
-            return f"Build: {build_dt.strftime('%Y-%m-%d %I:%M %p')}"
+            default_build_dt = datetime.fromtimestamp(build_source.stat().st_mtime)
+            default_line = default_build_dt.strftime('%Y-%m-%d %I:%M %p')
+
+            if not last_update_path.exists():
+                last_update_path.write_text(default_line + '\n', encoding='utf-8')
+                return f"Build: {default_line}"
+
+            lines = [line.strip() for line in last_update_path.read_text(encoding='utf-8').splitlines() if line.strip()]
+            if not lines:
+                last_update_path.write_text(default_line + '\n', encoding='utf-8')
+                return f"Build: {default_line}"
+
+            return f"Build: {lines[-1]}"
         except Exception:
             return "Build: Unknown"
     
