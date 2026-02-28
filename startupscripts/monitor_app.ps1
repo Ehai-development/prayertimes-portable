@@ -21,7 +21,6 @@ function Write-Log {
     $timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     $logMessage = "$timestamp - $Message"
     Add-Content -Path $LOG_FILE -Value $logMessage
-    Write-Host $logMessage
 }
 
 function Ensure-Setup {

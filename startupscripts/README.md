@@ -30,6 +30,7 @@
 Once installed, the monitor will:
 - Check if `PrayerTimeDisplay.exe` is running **every minute**
 - **Automatically restart** the app if it crashes or is closed
+- Run in the background with **no command prompt / PowerShell popup**
 - Log all activity to `C:\portable\startupscripts\app_monitor.log`
 
 ---
