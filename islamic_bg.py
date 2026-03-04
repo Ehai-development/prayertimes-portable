@@ -1785,21 +1785,35 @@ class IslamicBackground:
             
             # Full-screen overlay background
             overlay_bg = self.canvas.create_rectangle(
-                0, 0, width, height,
+                -2, -2, width + 2, height + 2,
                 fill='#f2f2f2',
                 outline='',
                 tags='iqamah_overlay'
             )
             self.iqamah_overlay_ids.append(overlay_bg)
 
-            line1_y = height * 0.31
-            countdown_y = line1_y + self.us(185, 105)
-            notice_y = countdown_y + self.us(235, 130)
-            icon_y = notice_y + self.us(175, 95)
+            # Live current time (top-left)
+            current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
+            top_left_time = self.canvas.create_text(
+                self.us(36, 18), self.us(36, 18),
+                text=current_time_text,
+                font=('Arial', self.fs(38, 18), 'bold'),
+                fill='#1a3a5f',
+                anchor='nw',
+                tags=('iqamah_overlay', 'iqamah_overlay_current_time')
+            )
+            self.iqamah_overlay_ids.append(top_left_time)
+
+            line1_y = height * 0.17
+            countdown_y = line1_y + self.us(165, 92)
+            notice_y = countdown_y + self.us(190, 105)
+            icon_y = notice_y + self.us(200, 112)
+            change_notice_y = icon_y + self.us(230, 125)
             is_friday_khutbah = (self.current_prayer_name == 'Jummah' and self.get_current_date().weekday() == 4)
             prayer_line_text = f"{self.current_prayer_name.upper()} IQAMAH IN"
             instruction_line_text = 'Please put your cell phone on silent mode'
             instruction_font_size = self.fs(68, 32)
+            iqamah_change_notice = self.get_iqamah_change_notice_text()
 
             if is_friday_khutbah:
                 prayer_line_text = 'JUMMAH KHUTBAH IN'
@@ -1840,6 +1854,36 @@ class IslamicBackground:
             # Larger centered no-phone icon beneath the notice
             icon_ids = self.draw_no_phone_icon(width / 2, icon_y, size=self.us(240, 130), tags='iqamah_overlay')
             self.iqamah_overlay_ids.extend(icon_ids)
+
+            if iqamah_change_notice:
+                left_text = 'IQAMAH CHANGES TO '
+                right_text = f'{iqamah_change_notice} TOMORROW'
+                notice_font = ('Arial', self.fs(52, 24), 'bold')
+
+                left_width = tkfont.Font(font=notice_font).measure(left_text)
+                right_width = tkfont.Font(font=notice_font).measure(right_text)
+                total_width = left_width + right_width
+                left_x = (width / 2) - (total_width / 2)
+
+                change_notice_left = self.canvas.create_text(
+                    left_x, change_notice_y,
+                    text=left_text,
+                    font=notice_font,
+                    fill='#2E7D32',
+                    anchor='w',
+                    tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
+                )
+                self.iqamah_overlay_ids.append(change_notice_left)
+
+                change_notice_right = self.canvas.create_text(
+                    left_x + left_width, change_notice_y,
+                    text=right_text,
+                    font=notice_font,
+                    fill='#d32f2f',
+                    anchor='w',
+                    tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
+                )
+                self.iqamah_overlay_ids.append(change_notice_right)
             
             # Raise overlay to top of canvas stacking order
             self.canvas.tag_raise('iqamah_overlay')
@@ -1860,7 +1904,7 @@ class IslamicBackground:
             height = self.canvas.winfo_height()
 
             overlay_bg = self.canvas.create_rectangle(
-                0, 0, width, height,
+                -2, -2, width + 2, height + 2,
                 fill='#f2f2f2',
                 outline='',
                 tags='iqamah_overlay'
@@ -2038,8 +2082,36 @@ class IslamicBackground:
             items = self.canvas.find_withtag('iqamah_countdown_time')
             if items:
                 self.canvas.itemconfig(items[0], text=countdown)
+
+            # Update top-left current time on countdown overlay
+            time_items = self.canvas.find_withtag('iqamah_overlay_current_time')
+            if time_items:
+                self.canvas.itemconfig(time_items[0], text=self.get_current_time().strftime('%I:%M:%S %p'))
         except Exception as e:
             print(f"ERROR in update_iqamah_overlay_countdown: {e}")
+
+    def get_iqamah_change_notice_text(self):
+        """Return one-day-before iqamah change notice for current prayer, else None."""
+        try:
+            if not self.current_prayer_name:
+                return None
+
+            prayer_key = 'Duhr' if self.current_prayer_name == 'Jummah' else self.current_prayer_name
+            today_data = self.get_today_prayers() or {}
+            tomorrow_data = self.get_tomorrow_prayers() or {}
+
+            today_iqamah = (today_data.get(f'{prayer_key}Iqama', '') or '').strip()
+            tomorrow_iqamah = (tomorrow_data.get(f'{prayer_key}Iqama', '') or '').strip()
+
+            if not today_iqamah or not tomorrow_iqamah:
+                return None
+
+            if today_iqamah == '--' or tomorrow_iqamah == '--' or today_iqamah == tomorrow_iqamah:
+                return None
+
+            return tomorrow_iqamah
+        except:
+            return None
     
     def get_iqamah_countdown(self):
         """Get countdown text to Iqamah time in MM:SS format"""
