@@ -15,6 +15,8 @@ $USE_GITHUB_TOKEN = $false
 $PORTABLE_ROOT = Split-Path -Parent (Split-Path -Parent $APP_EXE)
 $STATE_DIR = Join-Path $PORTABLE_ROOT ".update_state"
 $LAST_SHA_FILE = Join-Path $STATE_DIR "portable_last_sha.txt"
+$LAST_EXE_SHA_FILE = Join-Path $STATE_DIR "portable_exe_sha.txt"
+$PORTABLE_EXE_RELATIVE_PATH = "standalone/PrayerTimeDisplay.exe"
 
 function Write-Log {
     param([string]$Message)
@@ -186,6 +188,85 @@ function Get-DownloadUrlForFile {
     return $meta.download_url
 }
 
+function Get-RemoteContentMeta {
+    param(
+        [string]$RepoPath,
+        [string]$Ref
+    )
+
+    $encodedPath = [Uri]::EscapeDataString($RepoPath).Replace('%2F', '/')
+    $uri = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/contents/$encodedPath?ref=$Ref"
+    $headers = Get-GitHubHeaders
+    return Invoke-RestMethod -Uri $uri -Headers $headers -Method Get -ErrorAction Stop
+}
+
+function Get-PortableRepoPath {
+    param([string]$RelativePath)
+
+    if ([string]::IsNullOrWhiteSpace($REPO_CONTENT_PREFIX)) {
+        return $RelativePath
+    }
+
+    $prefix = $REPO_CONTENT_PREFIX.TrimEnd('/')
+    return "$prefix/$RelativePath"
+}
+
+function Get-LocalPortableExeSha {
+    if (Test-Path $LAST_EXE_SHA_FILE) {
+        $sha = (Get-Content -Path $LAST_EXE_SHA_FILE -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($null -ne $sha) {
+            return $sha.ToString().Trim()
+        }
+    }
+    return $null
+}
+
+function Save-LocalPortableExeSha {
+    param([string]$Sha)
+    if (-not [string]::IsNullOrWhiteSpace($Sha)) {
+        Set-Content -Path $LAST_EXE_SHA_FILE -Value $Sha -Encoding UTF8
+    }
+}
+
+function Ensure-PortableExeUpToDate {
+    param([string]$Ref)
+
+    $refToUse = if ([string]::IsNullOrWhiteSpace($Ref)) { $GITHUB_BRANCH } else { $Ref }
+    $repoPath = Get-PortableRepoPath -RelativePath $PORTABLE_EXE_RELATIVE_PATH
+    $meta = Get-RemoteContentMeta -RepoPath $repoPath -Ref $refToUse
+
+    if (-not $meta -or [string]::IsNullOrWhiteSpace([string]$meta.sha)) {
+        Write-Log "EXE check skipped: could not read remote EXE metadata"
+        return $false
+    }
+
+    $remoteExeSha = [string]$meta.sha
+    $localExeSha = Get-LocalPortableExeSha
+    $exeMissing = -not (Test-Path $APP_EXE)
+
+    if (-not $exeMissing -and -not [string]::IsNullOrWhiteSpace($localExeSha) -and $localExeSha -eq $remoteExeSha) {
+        return $false
+    }
+
+    Stop-App
+
+    $targetDir = Split-Path -Parent $APP_EXE
+    if (-not (Test-Path $targetDir)) {
+        New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+    }
+
+    $downloadUrl = [string]$meta.download_url
+    if ([string]::IsNullOrWhiteSpace($downloadUrl)) {
+        $downloadUrl = Get-DownloadUrlForFile -RepoPath $repoPath -Ref $refToUse
+    }
+
+    $headers = Get-GitHubHeaders
+    Invoke-WebRequest -Uri $downloadUrl -Headers $headers -OutFile $APP_EXE -UseBasicParsing -ErrorAction Stop
+    Save-LocalPortableExeSha -Sha $remoteExeSha
+    Write-Log "Updated executable: $PORTABLE_EXE_RELATIVE_PATH"
+    return $true
+}
+
 function Should-PreservePath {
     param([string]$RelativePath)
 
@@ -307,12 +388,15 @@ function Check-And-ApplyUpdates {
         if ([string]::IsNullOrWhiteSpace($localSha)) {
             Save-LocalPortableCommitSha -Sha $remoteSha
             Write-Log "Initialized update state to current remote SHA"
-            return $false
+            return (Ensure-PortableExeUpToDate -Ref $remoteSha)
         }
 
         if ($localSha -eq $remoteSha) {
-            Write-Log "No portable updates"
-            return $false
+            $exeUpdated = Ensure-PortableExeUpToDate -Ref $remoteSha
+            if (-not $exeUpdated) {
+                Write-Log "No portable updates"
+            }
+            return $exeUpdated
         }
 
         try {
@@ -338,8 +422,15 @@ function Check-And-ApplyUpdates {
         $updated = Sync-ChangedPortableFilesFromGitHub -ChangedFiles $changedFiles -HeadSha $remoteSha
         Save-LocalPortableCommitSha -Sha $remoteSha
 
+        $exeUpdated = Ensure-PortableExeUpToDate -Ref $remoteSha
+
         if ($updated) {
             Write-Log "Portable changed files applied successfully"
+            return $true
+        }
+
+        if ($exeUpdated) {
+            Write-Log "Executable updated successfully"
             return $true
         }
 
