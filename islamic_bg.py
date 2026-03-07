@@ -1162,6 +1162,24 @@ class IslamicBackground:
                     'today_iqama': change_info.get('old_time', '--'),
                     'tomorrow_iqama': change_info.get('new_time', '--')
                 }
+
+        # DST day-before: show the same full-box warning style on all affected prayers.
+        if self.dst_change_info and self.dst_change_info.get('days_until') == 1:
+            today_prayers = self.get_today_prayers()
+            tomorrow_prayers = self.get_tomorrow_prayers()
+            prayers_list = ['Fajr', 'Duhr', 'Asr', 'Maghrib', 'Isha']
+
+            for prayer in prayers_list:
+                today_iqama = today_prayers.get(f'{prayer}Iqama', '--') if today_prayers else '--'
+                tomorrow_iqama = tomorrow_prayers.get(f'{prayer}Iqama', '--') if tomorrow_prayers else '--'
+
+                if today_iqama != '--' and tomorrow_iqama != '--' and today_iqama != tomorrow_iqama:
+                    self.changing_prayers[prayer] = {
+                        'today': today_iqama,
+                        'tomorrow': tomorrow_iqama,
+                        'today_iqama': today_iqama,
+                        'tomorrow_iqama': tomorrow_iqama
+                    }
     
     def check_upcoming_changes(self):
         """Check for upcoming prayer time changes by reading Notes column in CSV"""
@@ -2754,7 +2772,7 @@ class IslamicBackground:
         self.canvas.create_text(
             x + width/2, name_y,
             text=name,
-            font=('Arial', self.fs(36, 18), 'bold'),
+            font=('Arial', self.fs(42, 21), 'bold'),
             fill='#1a3a5f'
         )
         
@@ -2791,7 +2809,7 @@ class IslamicBackground:
             suffix_size=self.fs(24, 12),
             color='#2a8a5f'
         )
-        
+
         # Draw full-box change notice if prayer changes tomorrow (1 day before change)
         if show_tomorrow_iqamah and tomorrow_iqamah:
             ribbon_state = 'normal' if self.ribbon_visible else 'hidden'
@@ -2830,7 +2848,7 @@ class IslamicBackground:
             self.canvas.create_text(
                 center_x, line1_y,
                 text=name.upper(),
-                font=('Arial', self.fs(62, 31), 'bold'),
+                font=('Arial', self.fs(46, 23), 'bold'),
                 fill='black',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
@@ -2921,7 +2939,7 @@ class IslamicBackground:
         self.canvas.create_text(
             x + width/2, y + self.us(20, 10),
             text='JUMMAH',
-            font=('Arial', self.fs(24, 12), 'bold'),
+            font=('Arial', self.fs(30, 15), 'bold'),
             fill='#1a3a5f'
         )
         
