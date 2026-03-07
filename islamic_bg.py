@@ -133,6 +133,10 @@ class IslamicBackground:
         self._transition_redraw_pending = False
         self._is_full_redraw = False
         self.prayer_box_shape_ids = {}
+        self.prayer_box_bounds = {}
+        self.athan_callout_box_id = None
+        self.athan_callout_text_id = None
+        self.athan_callout_prayer = None
         self.countdown_x = None
         self.countdown_y = None
         self._resize_redraw_job = None
@@ -879,13 +883,13 @@ class IslamicBackground:
         self.config['prayernow'] = prayernow_minutes
         self.iqamah_post_duration_seconds = prayernow_minutes * 60
 
-        # Athan prayer-box blinking duration in seconds (0 disables blinking)
+        # Athan callout flashing duration in seconds (0 disables callout flashing)
         try:
-            athan_blink_duration = int(self.config.get('athanblinkingduration', 15))
+            athan_blink_duration = int(self.config.get('athancalloutduran', 25))
             athan_blink_duration = max(0, athan_blink_duration)
         except:
-            athan_blink_duration = 15
-        self.config['athanblinkingduration'] = athan_blink_duration
+            athan_blink_duration = 25
+        self.config['athancalloutduran'] = athan_blink_duration
         
         # Load location/address from address.txt if available
         address_path = config_dir / 'address.txt'
@@ -1022,34 +1026,27 @@ class IslamicBackground:
             self.prayer_data = {}
     
     def load_jummah_time(self):
-        """Load Jummah time from today's CSV DuhrIqama or from config/jummah.txt"""
+        """Load Jummah time from config/jummah.txt (authoritative source)."""
         try:
-            # Try to get today's Duhr Iqama time from CSV (used for Friday Jummah)
-            today_date_str = self.get_current_date().strftime('%Y-%m-%d')
-            prayers_data = self.prayer_data.get(today_date_str, {})
-            duhr_iqama = prayers_data.get('DuhrIqama', '').strip()
-            
-            if duhr_iqama and duhr_iqama != '--':
-                # Use DuhrIqama from CSV as Jummah time
-                self.jummah_time = self.parse_time(duhr_iqama)
-                print(f"[JUMMAH] Using Jummah time from CSV: {duhr_iqama}")
-            else:
-                # Fall back to config/jummah.txt
-                config_dir = self.get_config_dir()
-                jummah_file = config_dir / 'jummah.txt'
-                
-                if not jummah_file.exists():
-                    # Create default file
-                    jummah_file.write_text('1:30 PM', encoding='utf-8')
-                    print("[JUMMAH] Created config/jummah.txt with default time 1:30 PM")
-                
-                jummah_time_str = jummah_file.read_text(encoding='utf-8').strip()
-                self.jummah_time = self.parse_time(jummah_time_str)
+            config_dir = self.get_config_dir()
+            jummah_file = config_dir / 'jummah.txt'
+
+            if not jummah_file.exists():
+                jummah_file.write_text('1:30 PM', encoding='utf-8')
+                print("[JUMMAH] Created config/jummah.txt with default time 1:30 PM")
+
+            jummah_time_str = jummah_file.read_text(encoding='utf-8').strip() or '1:30 PM'
+            parsed_jummah = self.parse_time(jummah_time_str)
+
+            if parsed_jummah:
+                self.jummah_time = parsed_jummah
                 print(f"[JUMMAH] Using Jummah time from config/jummah.txt: {jummah_time_str}")
-                
+            else:
+                self.jummah_time = self.parse_time('1:30 PM')
+                print(f"[JUMMAH] Invalid jummah.txt value '{jummah_time_str}', using default 1:30 PM")
+
         except Exception as e:
             print(f"[ERROR] Failed to load Jummah time: {e}")
-            # Default fallback
             self.jummah_time = self.parse_time('1:30 PM')
             print("[JUMMAH] Using default Jummah time: 1:30 PM")
     
@@ -1123,8 +1120,7 @@ class IslamicBackground:
                     self.announcements.append((text, color))
                 
                 if not self.announcements:
-                    default_msg = "Welcome to Ramadan!" if is_ramadan_period else "Welcome to Rose City Islamic Centre"
-                    self.announcements = [(default_msg, 'white')]
+                    print("[ANNOUNCEMENTS] No announcements found; red ribbon will be hidden")
                     
                 print(f"Loaded {len(self.announcements)} announcements with colors from {announcements_path.name}")
                 for text, color in self.announcements:
@@ -1132,8 +1128,7 @@ class IslamicBackground:
                     
         except Exception as e:
             print(f"Error loading announcements: {e}")
-            default_msg = "Welcome to Ramadan!" if is_ramadan_period else "Welcome to Rose City Islamic Centre"
-            self.announcements = [(default_msg, 'white')]
+            self.announcements = []
         
         # Initialize tracking for scrolling
         self.announcement_index = 0
@@ -1308,7 +1303,7 @@ class IslamicBackground:
             _, sunrise_time = self.resolve_sunrise_time(prayers_data)
             asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
             friday_duhr_start = self.parse_time('2:15 PM')
-            jummah_time = self.jummah_time or self.parse_time(prayers_data.get('DuhrIqama', ''))
+            jummah_time = self.jummah_time or self.parse_time('1:30 PM')
 
             if sunrise_time and jummah_time and sunrise_time <= now < jummah_time:
                 return 'Shrouq'
@@ -1367,7 +1362,7 @@ class IslamicBackground:
 
         if is_friday:
             _, sunrise_time = self.resolve_sunrise_time(prayers_data)
-            jummah_time = self.jummah_time or self.parse_time(prayers_data.get('DuhrIqama', ''))
+            jummah_time = self.jummah_time or self.parse_time('1:30 PM')
             asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
 
             if sunrise_time and jummah_time and sunrise_time <= current_time < jummah_time:
@@ -1469,9 +1464,9 @@ class IslamicBackground:
             }
 
     def get_athan_blink_state(self, prayers_data):
-        """Return (prayer_name, blink_visible) during athan blink window, else (None, False)."""
+        """Return active athan prayer during athan window, else (None, False)."""
         try:
-            duration_seconds = int(self.config.get('athanblinkingduration', 15))
+            duration_seconds = int(self.config.get('athancalloutduran', 25))
             if duration_seconds <= 0 or not prayers_data:
                 return None, False
 
@@ -1486,14 +1481,67 @@ class IslamicBackground:
                 athan_dt = datetime.combine(current_date, athan_time)
                 elapsed = (now_dt - athan_dt).total_seconds()
 
-                # Blink only for configured duration from athan time (one window per prayer)
+                # Active athan window for configured duration from athan time.
                 if 0 <= elapsed < duration_seconds:
-                    blink_visible = (int(elapsed) % 2 == 0)  # Toggle every 1 sec (matches update loop)
+                    blink_visible = (int(elapsed) % 2 == 0)
                     return prayer_name, blink_visible
         except:
             pass
 
         return None, False
+
+    def clear_athan_callout(self):
+        """Remove athan callout label if it exists."""
+        for item_id in (self.athan_callout_box_id, self.athan_callout_text_id):
+            if item_id:
+                try:
+                    self.canvas.delete(item_id)
+                except:
+                    pass
+        self.athan_callout_box_id = None
+        self.athan_callout_text_id = None
+        self.athan_callout_prayer = None
+
+    def update_athan_callout(self, athan_prayer=None, callout_visible=True):
+        """Show ATHAN callout anchored to the active prayer box."""
+        if (not athan_prayer
+            or not callout_visible
+            or athan_prayer not in self.prayer_box_bounds):
+            self.clear_athan_callout()
+            return
+
+        try:
+            x, y, width, _ = self.prayer_box_bounds[athan_prayer]
+            callout_text = f"{athan_prayer.upper()} ATHAN TIME"
+            text_font = ('Arial', self.fs(24, 12), 'bold')
+            text_width = tkfont.Font(font=text_font).measure(callout_text)
+
+            callout_height = self.us(40, 22)
+            callout_width = max(self.us(180, 120), text_width + self.us(34, 20))
+            callout_x = x + (width - callout_width) / 2
+            callout_y = y - self.us(48, 28)
+
+            self.clear_athan_callout()
+            self.athan_callout_box_id = self.draw_rounded_rectangle(
+                callout_x,
+                callout_y,
+                callout_width,
+                callout_height,
+                self.us(16, 8),
+                fill='#d32f2f',
+                outline='#b71c1c',
+                outline_width=self.us(2, 1)
+            )
+            self.athan_callout_text_id = self.canvas.create_text(
+                callout_x + (callout_width / 2),
+                callout_y + (callout_height / 2),
+                text=callout_text,
+                font=text_font,
+                fill='white'
+            )
+            self.athan_callout_prayer = athan_prayer
+        except:
+            self.clear_athan_callout()
     
     def schedule_countdown_update(self):
         """Schedule the countdown update to run every second"""
@@ -1526,6 +1574,11 @@ class IslamicBackground:
                         self.last_rendered_current_prayer = current_prayer_now
 
                     blinking_prayer, blink_visible = self.get_athan_blink_state(prayers_data)
+
+                    if self.iqamah_overlay_visible:
+                        self.update_athan_callout(None)
+                    else:
+                        self.update_athan_callout(blinking_prayer, blink_visible)
 
                     if current_prayer_now != self.last_rendered_current_prayer:
                         self.last_rendered_current_prayer = current_prayer_now
@@ -1650,6 +1703,8 @@ class IslamicBackground:
 
                 athan_time = self.parse_time(prayers_data.get(f'{prayer}Athan', ''))
                 iqamah_time = self.parse_time(prayers_data.get(f'{prayer}Iqama', ''))
+                if prayer == 'Duhr' and is_friday:
+                    iqamah_time = self.jummah_time or self.parse_time('1:30 PM')
 
                 if not athan_time or not iqamah_time:
                     continue
@@ -2377,6 +2432,7 @@ class IslamicBackground:
 
         # Reset box shape tracking for current frame
         self.prayer_box_shape_ids = {}
+        self.prayer_box_bounds = {}
         
         # Get current prayer
         current_prayer = self.get_current_prayer(prayers_data)
@@ -2446,6 +2502,7 @@ class IslamicBackground:
                                tomorrow_iqamah=tomorrow_iqamah_time)
             if box_shape_id:
                 self.prayer_box_shape_ids[key] = box_shape_id
+                self.prayer_box_bounds[key] = (x, y, box_w, box_h)
             
             # Draw Shouruq box below Fajr
             if idx == 0:
@@ -2469,6 +2526,7 @@ class IslamicBackground:
                 )
                 if shrouq_shape_id:
                     self.prayer_box_shape_ids['Shrouq'] = shrouq_shape_id
+                    self.prayer_box_bounds['Shrouq'] = (next_prayer_box_x, next_prayer_box_y, box_width, next_prayer_box_h)
             
             # Draw Jummah box moved to below Isha (was at top left)
             if idx == 4:
@@ -2479,6 +2537,7 @@ class IslamicBackground:
                 jummah_shape_id = self.draw_khutbah_box(jummah_box_x, jummah_box_y, box_width, jummah_box_h, is_current=is_jummah_current)
                 if jummah_shape_id:
                     self.prayer_box_shape_ids['Jummah'] = jummah_shape_id
+                    self.prayer_box_bounds['Jummah'] = (jummah_box_x, jummah_box_y, box_width, jummah_box_h)
                 
                 # Check if there are changes within 2 days (including day of change)
                 has_upcoming_changes = False
@@ -2498,8 +2557,9 @@ class IslamicBackground:
                     self.draw_upcoming_changes_ribbon(0, ribbon_y, width, yellow_ribbon_height)
                     ribbon_y = ribbon_y + yellow_ribbon_height + self.us(5, 3)
                 
-                # Draw announcement ribbon
-                self.draw_announcement_ribbon(0, ribbon_y, width, self.us(86, 52))
+                # Draw announcement ribbon only when announcements exist
+                if self.announcements:
+                    self.draw_announcement_ribbon(0, ribbon_y, width, self.us(86, 52))
             
             x_offset += box_w + spacing
 
