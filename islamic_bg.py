@@ -187,6 +187,7 @@ class IslamicBackground:
         # Tracking for upcoming prayer time changes (3+ days ahead)
         self.upcoming_changes = {}  # {prayer_name: {change_date: date, new_time: time, old_time: time}}
         self.upcoming_change_alerts = {}  # {prayer_name: display_info} for yellow ribbon
+        self.dst_change_info = None  # {change_date, days_until, shift_minutes}
         
         # Tracking for yellow ribbon scrolling animation
         self.yellow_ribbon_text_ids = []  # List of text object IDs for yellow ribbon
@@ -1165,6 +1166,7 @@ class IslamicBackground:
     def check_upcoming_changes(self):
         """Check for upcoming prayer time changes by reading Notes column in CSV"""
         self.upcoming_changes = {}
+        self.dst_change_info = None
         today = self.get_current_date()
         
         # Look for ANNOUNCEMENT dates (changes happen next day or on that day)
@@ -1214,6 +1216,50 @@ class IslamicBackground:
                                 }
                 except Exception as e:
                     pass
+
+        self.detect_daylight_saving_change()
+
+    def detect_daylight_saving_change(self):
+        """Detect day where all prayer times shift by one hour (DST-style change)."""
+        try:
+            today = self.get_current_date()
+            prayers_list = ['Fajr', 'Duhr', 'Asr', 'Maghrib', 'Isha']
+
+            for days_ahead in range(0, 4):
+                base_date = today + timedelta(days=days_ahead)
+                next_date = base_date + timedelta(days=1)
+
+                base_data = self.prayer_data.get(base_date.strftime('%Y-%m-%d'), {})
+                next_data = self.prayer_data.get(next_date.strftime('%Y-%m-%d'), {})
+                if not base_data or not next_data:
+                    continue
+
+                minute_diffs = []
+                for prayer in prayers_list:
+                    for kind in ['Athan', 'Iqama']:
+                        old_time = self.parse_time(base_data.get(f'{prayer}{kind}', ''))
+                        new_time = self.parse_time(next_data.get(f'{prayer}{kind}', ''))
+                        if old_time and new_time:
+                            old_minutes = (old_time.hour * 60) + old_time.minute
+                            new_minutes = (new_time.hour * 60) + new_time.minute
+                            minute_diffs.append(new_minutes - old_minutes)
+
+                # Require broad coverage and a consistent +60 or -60 minute shift.
+                if len(minute_diffs) < 6:
+                    continue
+
+                unique_diffs = set(minute_diffs)
+                if len(unique_diffs) == 1:
+                    shift_minutes = unique_diffs.pop()
+                    if shift_minutes in (60, -60):
+                        self.dst_change_info = {
+                            'change_date': next_date,
+                            'days_until': (next_date - today).days,
+                            'shift_minutes': shift_minutes
+                        }
+                        return
+        except Exception:
+            self.dst_change_info = None
     
     def parse_time(self, time_str):
         """Parse time string to datetime object for comparison"""
@@ -2620,6 +2666,11 @@ class IslamicBackground:
                         if 0 <= days_until <= 2:
                             has_upcoming_changes = True
                             break
+
+                if (not has_upcoming_changes) and self.dst_change_info:
+                    dst_days_until = self.dst_change_info.get('days_until', 99)
+                    if 0 <= dst_days_until <= 2:
+                        has_upcoming_changes = True
                 
                 ribbon_y = y + box_h + lower_row_offset + lower_row_box_height + self.us(15, 8)
                 
@@ -3230,6 +3281,20 @@ class IslamicBackground:
                         'new_time': new_time,
                         'suffix': f" on {change_date_str}"
                     })
+
+        if self.dst_change_info:
+            dst_days_until = self.dst_change_info.get('days_until', 99)
+            if 0 <= dst_days_until <= 2:
+                change_date = self.dst_change_info.get('change_date')
+                shift_minutes = self.dst_change_info.get('shift_minutes', 0)
+                direction_text = '1 HOUR AHEAD' if shift_minutes > 0 else '1 HOUR BEHIND'
+                change_date_str = change_date.strftime('%a, %b %d') if change_date else ''
+
+                changes_text.append({
+                    'prefix': "Daylight Saving Time alert: all prayer times move ",
+                    'new_time': direction_text,
+                    'suffix': f" on {change_date_str}"
+                })
         
         # If there are changes, display them with scrolling animation
         if changes_text:
