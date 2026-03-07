@@ -8,7 +8,6 @@ $LOG_FILE = "C:\portable\startupscripts\app_monitor.log"
 $GITHUB_OWNER = "Ehai-development"
 $GITHUB_REPO = "prayertimes-portable"
 $GITHUB_BRANCH = "main"
-$GITHUB_TOKEN_FILE = Join-Path (Split-Path -Parent $PSCommandPath) "github_token.txt"
 $REPO_CONTENT_PREFIX = ""
 $USE_GITHUB_TOKEN = $false
 
@@ -41,13 +40,6 @@ function Get-GitHubHeaders {
     }
     if ($USE_GITHUB_TOKEN) {
         $token = $env:GITHUB_TOKEN
-        if ([string]::IsNullOrWhiteSpace($token) -and (Test-Path $GITHUB_TOKEN_FILE)) {
-            try {
-                $token = (Get-Content -Path $GITHUB_TOKEN_FILE -ErrorAction SilentlyContinue | Select-Object -First 1)
-            } catch {
-                $token = $null
-            }
-        }
 
         if (-not [string]::IsNullOrWhiteSpace($token)) {
             $headers["Authorization"] = "token $($token.Trim())"
@@ -442,7 +434,7 @@ function Check-And-ApplyUpdates {
         }
 
         Write-Log "Update check/apply failed: $($_.Exception.Message)"
-        Write-Log "If repository is private, set GITHUB_TOKEN env var or create token file: $GITHUB_TOKEN_FILE"
+        Write-Log "If repository is private, set GITHUB_TOKEN environment variable"
     }
     return $false
 }
