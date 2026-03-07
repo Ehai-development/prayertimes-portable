@@ -1,0 +1,110 @@
+================================================================================
+PRAYER TIME DISPLAY - TESTING SETTINGS GUIDE
+================================================================================
+
+This guide explains how to use the testing mode shortcuts to test different
+features of the Prayer Time Display application.
+
+KEYBOARD SHORTCUTS FOR TESTING:
+================================================================================
+
+T - TOGGLE TESTING MODE (Master Switch)
+    - Enables/Disables all testing features
+    - Must be ON to use other testing shortcuts
+    - When enabled, application background shows colored test panels
+
+I - IQAMAH TESTING
+    - Toggles iqamah countdown simulation
+    - Requires: Testing Mode (T) enabled first
+    - Use to test the iqamah countdown display and silent mode
+
+C - CLOCK/TIME CHANGE TESTING  
+    - Toggles simulated time progression
+    - Requires: Testing Mode (T) enabled first
+    - App will simulate time starting from: 2026-02-05 06:43:00
+    - Useful for testing time-based features without waiting
+
+M - PROGRAM DISPLAY TESTING
+    - Toggles program display mode testing
+    - Requires: Testing Mode (T) enabled first
+    - Use with: Press P key to toggle program overlay visibility
+    - Test monthly programs display
+
+R - RAMADAN PROGRAMS TESTING
+    - Toggles ramadan-specific program mode
+    - Requires: Testing Mode (T) enabled first
+    - Use with: Press P key to view ramadan program overlay
+    - Tests automatic Ramadan content switching
+
+P - PROGRAM OVERLAY TOGGLE (Always Available)
+    - Shows/hides the monthly or ramadan programs overlay
+    - Works independently of testing mode
+    - Useful for viewing programs during normal operation
+
+F11 - FULLSCREEN TOGGLE (Always Available)
+    - Toggle fullscreen mode on/off
+
+================================================================================
+TESTING WORKFLOW EXAMPLE:
+================================================================================
+
+1. Start application normally
+2. Press T to enable Testing Mode (see colored test backgrounds)
+3. Press I to enable Iqamah Testing (test countdown display)
+4. Press P to view programs overlay (test program display)
+5. Press C to enable time simulation
+6. Press T again to disable Testing Mode when done
+
+================================================================================
+TESTING FILE LOCATIONS:
+================================================================================
+
+Settings File:           config/settings.json
+Monthly Programs:        config/monthly_programs.txt
+Ramadan Programs:        config/ramadan_programs.txt
+
+Edit the "testing" section in settings.json directly for:
+- Changing test start time: "test_start_time": "YYYY-MM-DD HH:MM:SS"
+- Individual boolean settings for: enabled, iqamah_testing, time_change, 
+  program_display, ramadan_programs
+
+================================================================================
+TESTING MODE INDICATORS:
+================================================================================
+
+When Testing Mode (T) is enabled, the application displays colored backgrounds:
+- Main Frame:        Light Pink (#FFE6E6)
+- Left Panel:        Lemon Chiffon (#FFFACD)
+- Right Header:      Light Blue (#E6F3FF)
+- Right Left Sect:   Light Green (#E6FFE6)
+- Image Area:        Light Purple (#F0E6FF)
+- Footer:            Light Orange (#FFE6CC)
+
+Debug messages will print to console when toggling each test setting.
+
+================================================================================
+DEBUG OUTPUT:
+================================================================================
+
+When you toggle test settings, the console will show:
+- "DEBUG: Testing Mode ENABLED/DISABLED"
+- "DEBUG: Iqamah Testing ENABLED/DISABLED"
+- "DEBUG: Time Change Testing ENABLED/DISABLED"
+- "DEBUG: Program Display Testing ENABLED/DISABLED"
+- "DEBUG: Ramadan Programs Testing ENABLED/DISABLED"
+
+If you try to enable a specific test without enabling Testing Mode first:
+- "DEBUG: Enable testing mode first with T key"
+
+================================================================================
+NOTES:
+================================================================================
+
+- All test settings are saved to settings.json for persistence
+- Changes take effect immediately (no app restart needed)
+- Test mode colors help identify which mode is active
+- Console output is printed to help track state changes
+- Use P key to view programs overlay for testing program display
+- Time simulation runs only when C key testing is enabled
+
+================================================================================

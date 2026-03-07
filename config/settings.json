@@ -1,0 +1,25 @@
+{
+  "data_file": "prayer_times.csv",
+  "location": "Your Masjid/Location",
+  "font_size": 100,
+  "time_format": "%H:%M",
+  "next_prayer_warning": 15,
+  "hijri_offset": 1,
+  "display_program": "no",
+  "program_show": 60,
+  "program_show_duration": 15,
+  "layout_style": "moon",
+  "ticker_enabled": "yes",
+  "ticker_speed": 5,
+  "athancalloutduran": 25,
+  "athanblinkingduration": 15,
+  "prayernow": 3,
+  "testing": {
+    "enabled": false,
+    "iqamah_testing": false,
+    "time_change": false,
+    "program_display": false,
+    "ramadan_programs": false,
+    "test_start_time": "2026-02-05 06:43:00"
+  }
+}
