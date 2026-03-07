@@ -1235,29 +1235,56 @@ class IslamicBackground:
                     continue
 
                 minute_diffs = []
+                prayer_shift_hits = 0
                 for prayer in prayers_list:
+                    prayer_diffs = []
                     for kind in ['Athan', 'Iqama']:
                         old_time = self.parse_time(base_data.get(f'{prayer}{kind}', ''))
                         new_time = self.parse_time(next_data.get(f'{prayer}{kind}', ''))
                         if old_time and new_time:
                             old_minutes = (old_time.hour * 60) + old_time.minute
                             new_minutes = (new_time.hour * 60) + new_time.minute
-                            minute_diffs.append(new_minutes - old_minutes)
+                            diff_minutes = new_minutes - old_minutes
+                            minute_diffs.append(diff_minutes)
+                            prayer_diffs.append(diff_minutes)
 
-                # Require broad coverage and a consistent +60 or -60 minute shift.
+                    if prayer_diffs:
+                        # This prayer participates if at least one time shifts by roughly one hour.
+                        if any(45 <= abs(d) <= 75 for d in prayer_diffs):
+                            prayer_shift_hits += 1
+
+                # Require broad coverage across prayers and enough parsed values.
                 if len(minute_diffs) < 6:
                     continue
 
-                unique_diffs = set(minute_diffs)
-                if len(unique_diffs) == 1:
-                    shift_minutes = unique_diffs.pop()
-                    if shift_minutes in (60, -60):
-                        self.dst_change_info = {
-                            'change_date': next_date,
-                            'days_until': (next_date - today).days,
-                            'shift_minutes': shift_minutes
-                        }
-                        return
+                if prayer_shift_hits < 4:
+                    continue
+
+                positive = [d for d in minute_diffs if d > 0]
+                negative = [d for d in minute_diffs if d < 0]
+
+                # Determine dominant shift direction.
+                if len(positive) >= len(negative):
+                    direction = 1
+                    directional_diffs = positive
+                else:
+                    direction = -1
+                    directional_diffs = [-d for d in negative]
+
+                # Need most values to agree on direction and be close to one-hour shift.
+                if len(directional_diffs) < max(5, int(0.7 * len(minute_diffs))):
+                    continue
+
+                near_hour = [d for d in directional_diffs if 45 <= d <= 75]
+                if len(near_hour) < max(4, int(0.7 * len(directional_diffs))):
+                    continue
+
+                self.dst_change_info = {
+                    'change_date': next_date,
+                    'days_until': (next_date - today).days,
+                    'shift_minutes': 60 * direction
+                }
+                return
         except Exception:
             self.dst_change_info = None
     
