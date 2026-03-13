@@ -204,6 +204,8 @@ class IslamicBackground:
         self.yellow_ribbon_height = 0  # Yellow ribbon height
         self.announcement_tick_ms = 100
         self.yellow_ribbon_tick_ms = 100
+        self.salah_names_show_arabic = False
+        self._last_salah_name_arabic_state = None
         
         # Jummah time (loaded from CSV or config/jummah.txt)
         self.jummah_time = None
@@ -881,7 +883,10 @@ class IslamicBackground:
             self.config = {
                 "data_file": "prayer_times.csv",
                 "location": "MASJID AL-SALAM",
-                "prayernow": 3
+                "prayernow": 3,
+                "shrouqplus": 10,
+                "arabicchangeevery": 30,
+                "arabicnameduration": 5
             }
 
         # Post-prayer overlay duration in minutes (configurable)
@@ -900,6 +905,30 @@ class IslamicBackground:
         except:
             athan_blink_duration = 25
         self.config['athancalloutduran'] = athan_blink_duration
+
+        # Arabic prayer-name display cadence in seconds (English by default)
+        try:
+            arabic_change_every_seconds = int(self.config.get('arabicchangeevery', 30))
+            arabic_change_every_seconds = max(1, arabic_change_every_seconds)
+        except:
+            arabic_change_every_seconds = 30
+        self.config['arabicchangeevery'] = arabic_change_every_seconds
+
+        try:
+            arabic_name_duration_seconds = int(self.config.get('arabicnameduration', 5))
+            arabic_name_duration_seconds = max(0, arabic_name_duration_seconds)
+        except:
+            arabic_name_duration_seconds = 5
+        arabic_name_duration_seconds = min(arabic_name_duration_seconds, arabic_change_every_seconds)
+        self.config['arabicnameduration'] = arabic_name_duration_seconds
+
+        # Shrouq additional minutes label (configurable)
+        try:
+            shrouq_plus_minutes = int(self.config.get('shrouqplus', 10))
+            shrouq_plus_minutes = max(0, shrouq_plus_minutes)
+        except:
+            shrouq_plus_minutes = 10
+        self.config['shrouqplus'] = shrouq_plus_minutes
         
         # Load location/address from address.txt if available
         address_path = config_dir / 'address.txt'
@@ -1897,15 +1926,19 @@ class IslamicBackground:
         """
         try:
             now = self.get_current_time()
+            is_friday = (self.get_current_date().weekday() == 4)
             current_prayer = self.get_current_prayer(prayers_data)
 
             if current_prayer:
-                is_friday = (self.get_current_date().weekday() == 4)
-                current_athan = self.parse_time(prayers_data.get(f'{current_prayer}Athan', ''))
-                current_iqamah = self.parse_time(prayers_data.get(f'{current_prayer}Iqama', ''))
+                prayer_key = 'Duhr' if current_prayer == 'Jummah' else current_prayer
+                current_athan = self.parse_time(prayers_data.get(f'{prayer_key}Athan', ''))
+                current_iqamah = self.parse_time(prayers_data.get(f'{prayer_key}Iqama', ''))
+
+                if current_prayer == 'Jummah' and is_friday:
+                    current_iqamah = self.jummah_time or self.parse_time('1:30 PM')
 
                 if current_athan and current_iqamah and current_athan <= now < current_iqamah:
-                    if current_prayer == 'Duhr' and is_friday:
+                    if prayer_key == 'Duhr' and is_friday:
                         return {
                             'prefix_text': '',
                             'name_text': 'JUMMAH KHUTBAH',
@@ -1922,6 +1955,13 @@ class IslamicBackground:
 
             next_prayer_name, next_athan = self.get_next_prayer(prayers_data)
             self.next_prayer_athan_time = next_athan
+            if is_friday and next_prayer_name == 'Jummah':
+                return {
+                    'prefix_text': '',
+                    'name_text': 'JUMMAH KHUTBAH',
+                    'in_text': ' IN ',
+                    'countdown_text': self.get_countdown(next_athan)
+                }
             return {
                 'prefix_text': 'NEXT PRAYER: ',
                 'name_text': (next_prayer_name or '---').upper(),
@@ -2027,6 +2067,8 @@ class IslamicBackground:
             current_date = self.get_current_date()
             if current_date != self._last_seen_date:
                 self.handle_date_rollover(current_date)
+
+            self.update_salah_name_rotation_state()
 
             if self.current_time_text_id:
                 try:
@@ -2187,6 +2229,13 @@ class IslamicBackground:
                 iqamah_dt = datetime.combine(mocked_date, iqamah_time)
                 post_end_dt = iqamah_dt + timedelta(seconds=self.iqamah_post_duration_seconds)
 
+                if prayer == 'Duhr' and is_friday:
+                    time_until_jummah = (iqamah_dt - now_dt).total_seconds()
+                    if 0 < time_until_jummah <= 120:
+                        pre_countdown_prayer = display_prayer
+                        self.current_prayer_iqamah_time = iqamah_time
+                        break
+
                 if athan_dt <= now_dt < iqamah_dt:
                     pre_countdown_prayer = display_prayer
                     self.current_prayer_iqamah_time = iqamah_time
@@ -2223,6 +2272,8 @@ class IslamicBackground:
                         or self.iqamah_overlay_mode != 'post'):
                         self.iqamah_overlay_ids = []
                         self.show_post_iqamah_overlay()
+                    else:
+                        self.update_iqamah_overlay_countdown()
                 else:
                     # For Friday Jummah, just hide overlay if visible
                     if self.iqamah_overlay_visible:
@@ -3170,26 +3221,19 @@ class IslamicBackground:
         # Draw rounded rectangle background
         box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w)
         
-        # Prayer name
-        name_y = y + self.us(35, 18)
+        # Rotating prayer name (English/Arabic)
+        show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+        name_text = arabic if show_arabic_name else name
+        name_font = ('Arial', self.fs(40, 20), 'bold') if show_arabic_name else ('Arial', self.fs(42, 21), 'bold')
         self.canvas.create_text(
-            x + width/2, name_y,
-            text=name,
-            font=('Arial', self.fs(42, 21), 'bold'),
+            x + width/2, y + self.us(42, 20),
+            text=name_text,
+            font=name_font,
             fill='#1a3a5f'
         )
         
-        # Arabic name
-        arabic_y = name_y + self.us(30, 14)
-        self.canvas.create_text(
-            x + width/2, arabic_y,
-            text=arabic,
-            font=('Arial', self.fs(24, 12)),
-            fill='#4a6a8f'
-        )
-        
         # Athan time
-        athan_y = arabic_y + self.us(48, 22)
+        athan_y = y + self.us(120, 56)
         # Removed "ATHAN" label
         self.draw_time_text_with_meridiem(
             x + width/2, athan_y,
@@ -3338,15 +3382,18 @@ class IslamicBackground:
             outline_w = 3
         box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w)
         
-        # Draw Jummah text
+        # Rotate only the top prayer name (JUMMAH <-> العربية); keep KHUTBAH in English
+        show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+        title_text = 'الجمعة' if show_arabic_name else 'JUMMAH'
+        title_font = ('Arial', self.fs(36, 18), 'bold') if show_arabic_name else ('Arial', self.fs(30, 15), 'bold')
         self.canvas.create_text(
             x + width/2, y + self.us(20, 10),
-            text='JUMMAH',
-            font=('Arial', self.fs(30, 15), 'bold'),
+            text=title_text,
+            font=title_font,
             fill='#1a3a5f'
         )
-        
-        # Draw Khutbah text
+
+        # Keep KHUTBAH label fixed in English beneath the prayer name
         self.canvas.create_text(
             x + width/2, y + self.us(50, 22),
             text='KHUTBAH',
@@ -3391,20 +3438,15 @@ class IslamicBackground:
         # Draw rounded rectangle background
         box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w)
         
-        # Draw Shrouq text (match regular prayer box styling)
+        # Rotating Shrouq name (English/Arabic)
+        show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+        title_text = 'الشروق' if show_arabic_name else 'SHROUQ'
+        title_font = ('Arial', self.fs(40, 20), 'bold') if show_arabic_name else ('Arial', self.fs(32, 16), 'bold')
         self.canvas.create_text(
-            x + width/2, y + self.us(35, 18),
-            text='SHROUQ',
-            font=('Arial', self.fs(32, 16), 'bold'),
+            x + width/2, y + self.us(42, 20),
+            text=title_text,
+            font=title_font,
             fill='#1a3a5f'
-        )
-        
-        # Draw Arabic name
-        self.canvas.create_text(
-            x + width/2, y + self.us(65, 28),
-            text='الشروق',
-            font=('Arial', self.fs(24, 12)),
-            fill='#4a6a8f'
         )
         
         # Draw sunrise time
@@ -3416,10 +3458,11 @@ class IslamicBackground:
             color='#1a3a5f'
         )
 
-        # +10 minutes note at the bottom
+        # Configurable +minutes note at the bottom
+        shrouq_plus_minutes = int(self.config.get('shrouqplus', 10))
         self.canvas.create_text(
             x + width/2, y + height - self.us(25, 12),
-            text='+ 10 MINUTES',
+            text=f'+ {shrouq_plus_minutes} MINUTES',
             font=('Arial', self.fs(26, 14), 'bold'),
             fill='green'
         )
@@ -3609,6 +3652,36 @@ class IslamicBackground:
     def schedule_prayer_time_toggle(self):
         """Schedule the prayer time toggle every 15 minutes"""
         self.update_prayer_time_toggle()
+
+    def update_salah_name_rotation_state(self):
+        """Show Arabic prayer names briefly on a configurable cadence, otherwise default to English."""
+        try:
+            change_every_seconds = int(self.config.get('arabicchangeevery', 30))
+            change_every_seconds = max(1, change_every_seconds)
+        except:
+            change_every_seconds = 30
+
+        try:
+            arabic_duration_seconds = int(self.config.get('arabicnameduration', 5))
+            arabic_duration_seconds = max(0, arabic_duration_seconds)
+        except:
+            arabic_duration_seconds = 5
+        arabic_duration_seconds = min(arabic_duration_seconds, change_every_seconds)
+
+        now_dt = datetime.combine(self.get_current_date(), self.get_current_time())
+        seconds_into_cycle = int(now_dt.timestamp()) % change_every_seconds
+        show_arabic = arabic_duration_seconds > 0 and seconds_into_cycle < arabic_duration_seconds
+
+        if self._last_salah_name_arabic_state is None:
+            self._last_salah_name_arabic_state = show_arabic
+            self.salah_names_show_arabic = show_arabic
+            return
+
+        if show_arabic != self._last_salah_name_arabic_state:
+            self._last_salah_name_arabic_state = show_arabic
+            self.salah_names_show_arabic = show_arabic
+            if not self.iqamah_overlay_visible:
+                self.redraw_full_display()
     
     def update_prayer_time_toggle(self):
         """Toggle between today's and tomorrow's Iqamah times - DISABLED"""

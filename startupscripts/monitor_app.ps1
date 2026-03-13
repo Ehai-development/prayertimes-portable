@@ -180,6 +180,50 @@ function Get-DownloadUrlForFile {
     return $meta.download_url
 }
 
+function Get-RemoteTreeFiles {
+    param([string]$Ref)
+    $headers = Get-GitHubHeaders
+    $commitUri = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/commits/$Ref"
+    $commitMeta = Invoke-RestMethod -Uri $commitUri -Headers $headers -Method Get -ErrorAction Stop
+    $treeSha = $commitMeta.commit.tree.sha
+    $treeUri = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/git/trees/$treeSha?recursive=1"
+    $tree = Invoke-RestMethod -Uri $treeUri -Headers $headers -Method Get -ErrorAction Stop
+    return @($tree.tree | Where-Object { $_.type -eq 'blob' })
+}
+
+function Sync-AllFilesFromTree {
+    param(
+        [array]$TreeFiles,
+        [string]$Ref
+    )
+    $headers = Get-GitHubHeaders
+    $anyApplied = $false
+    foreach ($item in $TreeFiles) {
+        $relativePath = [string]$item.path
+        if ([string]::IsNullOrWhiteSpace($relativePath)) { continue }
+        if (Should-PreservePath -RelativePath $relativePath) { continue }
+        $targetPath = Join-Path $PORTABLE_ROOT ($relativePath -replace '/', '\')
+        $targetDir = Split-Path -Parent $targetPath
+        if (-not (Test-Path $targetDir)) {
+            New-Item -Path $targetDir -ItemType Directory -Force | Out-Null
+        }
+        $rawUrl = "https://raw.githubusercontent.com/$GITHUB_OWNER/$GITHUB_REPO/$Ref/$relativePath"
+        try {
+            Invoke-WebRequest -Uri $rawUrl -Headers $headers -OutFile $targetPath -UseBasicParsing -ErrorAction Stop
+            Write-Log "Full sync: updated $relativePath"
+            $anyApplied = $true
+            # Update EXE blob SHA tracking so Ensure-PortableExeUpToDate won't re-download
+            $normalizedRelPath = $relativePath -replace '\\', '/'
+            if ($normalizedRelPath -eq $PORTABLE_EXE_RELATIVE_PATH -and -not [string]::IsNullOrWhiteSpace([string]$item.sha)) {
+                Save-LocalPortableExeSha -Sha ([string]$item.sha)
+            }
+        } catch {
+            Write-Log "Full sync: failed to download ${relativePath}: $($_.Exception.Message)"
+        }
+    }
+    return $anyApplied
+}
+
 function Get-RemoteContentMeta {
     param(
         [string]$RepoPath,
@@ -398,8 +442,23 @@ function Check-And-ApplyUpdates {
                 return $false
             }
 
-            Write-Log "Compare failed for local SHA '$localSha'. Resetting state to remote SHA."
-            Save-LocalPortableCommitSha -Sha $remoteSha
+            # Compare failed — histories likely diverged due to a force-push from a clean repo.
+            # Fall back to a full tree sync so all files (including config and EXE) are updated.
+            Write-Log "Compare failed for local SHA '$localSha' (history may have diverged). Performing full sync to $remoteSha"
+            try {
+                $treeFiles = Get-RemoteTreeFiles -Ref $remoteSha
+                Stop-App
+                $fullSynced = Sync-AllFilesFromTree -TreeFiles $treeFiles -Ref $remoteSha
+                Save-LocalPortableCommitSha -Sha $remoteSha
+                if ($fullSynced) {
+                    Write-Log "Full sync completed successfully"
+                    return $true
+                }
+                Write-Log "Full sync: no files were applied"
+            } catch {
+                Write-Log "Full sync failed: $($_.Exception.Message)"
+                Save-LocalPortableCommitSha -Sha $remoteSha
+            }
             return $false
         }
         if (-not $changedFiles -or $changedFiles.Count -eq 0) {

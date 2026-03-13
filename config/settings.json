@@ -13,6 +13,9 @@
   "ticker_speed": 5,
   "athancalloutduran": 25,
   "athanblinkingduration": 15,
+  "arabicchangeevery": 30,
+  "arabicnameduration": 5,
+  "shrouqplus": 15,
   "prayernow": 3,
   "testing": {
     "enabled": false,
