@@ -148,6 +148,9 @@ class IslamicBackground:
         
         self.star_twinkle_cycle_seconds = 2.5
         self.star_twinkle_tick_ms = 500
+        self.eid_firework_cycle_seconds = 2.2
+        self.eid_balloon_cycle_seconds = 9.5
+        self.eid_animation_tick_ms = 220
 
         self.logo_base_image = None
         self.logo_image_path = None
@@ -244,6 +247,7 @@ class IslamicBackground:
             self.root.after(100, self.initial_draw)
             self.root.after(self.lantern_pulse_tick_ms, self.schedule_lantern_pulse_animation)
             self.root.after(self.star_twinkle_tick_ms, self.schedule_star_twinkle_animation)
+            self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
         except Exception as e:
             print(f"[ERROR] Startup failed: {e}", flush=True)
             import traceback
@@ -458,6 +462,30 @@ class IslamicBackground:
             except:
                 pass
 
+    def schedule_eid_animation(self):
+        """Refresh Eid fireworks and balloons so they continuously animate."""
+        try:
+            if self.is_eid_day(self.get_current_date()) and not self.iqamah_overlay_visible and not self._is_full_redraw:
+                self.update_eid_effects_only()
+        except Exception as e:
+            print(f"ERROR in schedule_eid_animation: {e}")
+        finally:
+            try:
+                self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
+            except:
+                pass
+
+    def update_eid_effects_only(self):
+        """Update only Eid animated effects without redrawing entire display."""
+        width = self.canvas.winfo_width()
+        height = self.canvas.winfo_height()
+        if width <= 1 or height <= 1:
+            return
+
+        self.canvas.delete('animated_eid')
+        self.draw_eid_fireworks(width, height, animated=True, tags='animated_eid')
+        self.draw_eid_balloons(width, height, animated=True, tags='animated_eid')
+
     def update_lanterns_only(self):
         """Update only the lantern visuals without redrawing the entire display."""
         width = self.canvas.winfo_width()
@@ -593,6 +621,10 @@ class IslamicBackground:
             return
 
         current_date = self.get_current_date()
+        if self.is_eid_day(current_date):
+            self.draw_eid_background(width, height)
+            return
+
         if self.is_ramadan(current_date):
             self.draw_ramadan_background(width, height)
             return
@@ -934,39 +966,8 @@ class IslamicBackground:
     
     def draw_background_ornaments(self, width, height):
         """Draw large decorative circular patterns in background"""
-        # Draw large semi-transparent geometric patterns
-        positions = [
-            (width * 0.2, height * 0.3, 150),
-            (width * 0.8, height * 0.3, 150),
-            (width * 0.2, height * 0.7, 150),
-            (width * 0.8, height * 0.7, 150),
-        ]
-        
-        for x, y, radius in positions:
-            # Draw concentric circles
-            for i in range(3):
-                r = radius - (i * 25)
-                self.canvas.create_oval(
-                    x - r, y - r, x + r, y + r,
-                    outline='#7896c8',
-                    width=2,
-                    stipple='gray12'
-                )
-            
-            # Draw radiating lines from center
-            num_lines = 16
-            for i in range(num_lines):
-                angle = (i * 2 * math.pi / num_lines)
-                x1 = x + 40 * math.cos(angle)
-                y1 = y + 40 * math.sin(angle)
-                x2 = x + radius * math.cos(angle)
-                y2 = y + radius * math.sin(angle)
-                self.canvas.create_line(
-                    x1, y1, x2, y2,
-                    fill='#7896c8',
-                    width=1,
-                    stipple='gray12'
-                )
+        # Disabled per UI request.
+        return
     
     def is_ramadan(self, date_obj):
         """Check if a Gregorian date falls in Ramadan (Hijri month 9)."""
@@ -981,6 +982,190 @@ class IslamicBackground:
                 return ramadan_start <= date_obj <= ramadan_end
             except:
                 return False
+
+    def is_eid_day(self, date_obj):
+        """Check if date is Eid al-Fitr (1 Shawwal) or Eid al-Adha (10 Dhul-Hijjah)."""
+        try:
+            hijri_date = Gregorian(date_obj.year, date_obj.month, date_obj.day).to_hijri()
+            return (hijri_date.month == 10 and hijri_date.day == 1) or (hijri_date.month == 12 and hijri_date.day == 10)
+        except:
+            # Fallback windows for 2026 if Hijri conversion is unavailable.
+            return date_obj in {
+                datetime.strptime('2026-03-30', '%Y-%m-%d').date(),  # Eid al-Fitr 2026
+                datetime.strptime('2026-05-27', '%Y-%m-%d').date()   # Eid al-Adha 2026
+            }
+
+    def draw_eid_background(self, width, height):
+        """Draw Eid-only celebratory background with fireworks and balloons."""
+        gradient_steps = 54
+        top_r, top_g, top_b = (20, 38, 82)
+        bot_r, bot_g, bot_b = (54, 95, 169)
+
+        for i in range(gradient_steps):
+            ratio = i / max(1, gradient_steps - 1)
+            r = int(top_r + (bot_r - top_r) * ratio)
+            g = int(top_g + (bot_g - top_g) * ratio)
+            b = int(top_b + (bot_b - top_b) * ratio)
+            color = f'#{r:02x}{g:02x}{b:02x}'
+            y_pos = (height * i) / gradient_steps
+            self.canvas.create_rectangle(
+                0, y_pos, width, y_pos + (height / gradient_steps) + 2,
+                fill=color,
+                outline=''
+            )
+
+        self.draw_eid_fireworks(width, height, animated=True, tags='animated_eid')
+        self.draw_eid_balloons(width, height, animated=True, tags='animated_eid')
+
+    def draw_eid_fireworks(self, width, height, animated=False, tags=None):
+        """Draw decorative fireworks bursts."""
+        bursts = [
+            # Keep fireworks far from the Arabic verse strip (center upper band).
+            (0.05, 0.05, 0.050, '#ffd54f'),
+            (0.14, 0.07, 0.040, '#ff8a80'),
+            (0.86, 0.07, 0.040, '#b39ddb'),
+            (0.95, 0.05, 0.050, '#80deea')
+        ]
+
+        # Keep all fireworks strictly above the Quran verse strip regardless of UI scaling.
+        verse_y = (height / 2) - self.us(324)
+        max_burst_bottom_y = verse_y - self.us(36, 20)
+
+        t_now = time.time()
+        for idx, (x_ratio, y_ratio, radius_ratio, color) in enumerate(bursts):
+            cx = width * x_ratio
+            cy = height * y_ratio
+            base_radius = min(width, height) * radius_ratio
+            if animated:
+                phase = ((t_now / self.eid_firework_cycle_seconds) + (idx * 0.31)) % 1.0
+                pop_strength = math.sin(phase * math.pi)
+                radius = base_radius * (0.35 + (0.90 * pop_strength))
+                color_mix = 0.35 + (0.65 * pop_strength)
+                burst_color = self._mix_hex_color('#6f7ea6', color, color_mix)
+            else:
+                radius = base_radius
+                burst_color = color
+
+            # Enforce hard safety boundary so firework rays never touch verse/Arabic label area.
+            max_radius = max_burst_bottom_y - cy
+            if max_radius <= self.us(8, 4):
+                continue
+            radius = min(radius, max_radius)
+
+            line_count = 20
+
+            for i in range(line_count):
+                angle = (2 * math.pi * i) / line_count
+                x1 = cx + (radius * 0.20) * math.cos(angle)
+                y1 = cy + (radius * 0.20) * math.sin(angle)
+                x2 = cx + radius * math.cos(angle)
+                y2 = cy + radius * math.sin(angle)
+
+                if y2 > max_burst_bottom_y:
+                    continue
+
+                self.canvas.create_line(
+                    x1, y1, x2, y2,
+                    fill=burst_color,
+                    width=self.us(2, 1),
+                    tags=tags
+                )
+
+                if animated:
+                    spark_r = self.us(2, 1)
+                    self.canvas.create_oval(
+                        x2 - spark_r, y2 - spark_r,
+                        x2 + spark_r, y2 + spark_r,
+                        fill=burst_color,
+                        outline='',
+                        tags=tags
+                    )
+
+            # Make the burst "spit" Eid text during the pop peak.
+            if animated and pop_strength > 0.86:
+                text_y = cy - radius - self.us(16, 8)
+                self.canvas.create_text(
+                    cx,
+                    text_y,
+                    text='Eid Mubarak',
+                    font=('Arial', self.fs(26, 12), 'bold'),
+                    fill=burst_color,
+                    tags=tags
+                )
+
+            self.canvas.create_oval(
+                cx - self.us(6, 3), cy - self.us(6, 3),
+                cx + self.us(6, 3), cy + self.us(6, 3),
+                fill=burst_color,
+                outline='',
+                tags=tags
+            )
+
+    def draw_eid_balloons(self, width, height, animated=False, tags=None):
+        """Draw side balloons with strings to celebrate Eid."""
+        balloons = [
+            (0.06, 0.84, '#ef5350', 0.02),
+            (0.11, 0.75, '#ab47bc', 0.18),
+            (0.16, 0.86, '#29b6f6', 0.31),
+            (0.84, 0.86, '#66bb6a', 0.47),
+            (0.89, 0.75, '#ffa726', 0.62),
+            (0.94, 0.84, '#ec407a', 0.79)
+        ]
+
+        balloon_w = self.us(52, 30)
+        balloon_h = self.us(68, 40)
+        string_len = self.us(95, 55)
+        t_now = time.time()
+
+        for x_ratio, y_ratio, color, phase_offset in balloons:
+            if animated:
+                rise_progress = ((t_now / self.eid_balloon_cycle_seconds) + phase_offset) % 1.0
+                rise_distance = height * 0.30
+                sway = math.sin((t_now * 1.9) + (phase_offset * 8.0)) * self.us(12, 6)
+                cx = (width * x_ratio) + sway
+                cy = (height * y_ratio) - (rise_progress * rise_distance)
+            else:
+                cx = width * x_ratio
+                cy = height * y_ratio
+
+            self.canvas.create_oval(
+                cx - (balloon_w / 2), cy - (balloon_h / 2),
+                cx + (balloon_w / 2), cy + (balloon_h / 2),
+                fill=color,
+                outline='white',
+                width=self.us(2, 1),
+                tags=tags
+            )
+
+            self.canvas.create_oval(
+                cx - (balloon_w * 0.18), cy - (balloon_h * 0.20),
+                cx - (balloon_w * 0.02), cy - (balloon_h * 0.04),
+                fill='white',
+                outline='',
+                tags=tags
+            )
+
+            knot_y = cy + (balloon_h / 2)
+            self.canvas.create_polygon(
+                cx - self.us(5, 3), knot_y,
+                cx + self.us(5, 3), knot_y,
+                cx, knot_y + self.us(8, 4),
+                fill=color,
+                outline='white',
+                width=1,
+                tags=tags
+            )
+
+            self.canvas.create_line(
+                cx,
+                knot_y + self.us(8, 4),
+                cx + self.us(10, 6),
+                knot_y + string_len,
+                fill='white',
+                width=1,
+                smooth=True,
+                tags=tags
+            )
     
     def load_prayer_times(self):
         """Load prayer times from base CSV and override Ramadan dates with Ramadan 2026 timings"""
