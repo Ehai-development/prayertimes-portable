@@ -10,6 +10,7 @@
   "program_show_duration": 15,
   "theme": "elegent",
   "layout_style": "moon",
+  "background_image": "images/back.png",
   "ticker_enabled": "yes",
   "ticker_speed": 5,
   "athancalloutduran": 25,

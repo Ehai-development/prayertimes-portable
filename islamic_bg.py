@@ -2687,14 +2687,19 @@ class IslamicBackground:
             width = self.canvas.winfo_width()
             height = self.canvas.winfo_height()
             
-            # Full-screen overlay background (configured image when available)
-            overlay_bg = self.draw_overlay_background(width, height, tags='iqamah_overlay')
+            # Keep pre-iqamah countdown on the original solid white background.
+            overlay_bg = self.canvas.create_rectangle(
+                -2, -2, width + 2, height + 2,
+                fill='white',
+                outline='',
+                tags='iqamah_overlay'
+            )
             self.iqamah_overlay_ids.append(overlay_bg)
 
             # Live current time (top-left)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
             top_left_time = self.canvas.create_text(
-                self.us(36, 18), self.us(36, 18),
+                self.us(36, 18), self.us(4, 2),
                 text=current_time_text,
                 font=('Arial', self.fs(38, 18), 'bold'),
                 fill='#1a3a5f',
@@ -2808,7 +2813,7 @@ class IslamicBackground:
             # Live current time (top-left)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
             top_left_time = self.canvas.create_text(
-                self.us(36, 18), self.us(36, 18),
+                self.us(36, 18), self.us(4, 2),
                 text=current_time_text,
                 font=('Arial', self.fs(38, 18), 'bold'),
                 fill='#1a3a5f',
@@ -2993,6 +2998,7 @@ class IslamicBackground:
             time_items = self.canvas.find_withtag('iqamah_overlay_current_time')
             if time_items:
                 self.canvas.itemconfig(time_items[0], text=self.get_current_time().strftime('%I:%M:%S %p'))
+                self.canvas.coords(time_items[0], self.us(36, 18), self.us(4, 2))
         except Exception as e:
             print(f"ERROR in update_iqamah_overlay_countdown: {e}")
 
@@ -3986,8 +3992,8 @@ class IslamicBackground:
         panel_y1 = self.jummah_box_y
         line_center_y = panel_y1 + (panel_height / 2)
 
-        # Current time aligns with the bottom of Shrouq/Jummah lower row.
-        current_time_y = self.jummah_box_y + self.jummah_box_h + self.us(4, 2)
+        # Move current time noticeably higher relative to the lower prayer row.
+        current_time_y = self.jummah_box_y + self.jummah_box_h - self.us(20, 10)
         outline_step = self.us(3, 2)
         outline_offsets = [
             (-outline_step, -outline_step), (-outline_step, 0), (-outline_step, outline_step),
