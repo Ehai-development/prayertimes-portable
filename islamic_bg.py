@@ -210,6 +210,12 @@ class IslamicBackground:
         self.yellow_ribbon_tick_ms = 100
         self.salah_names_show_arabic = False
         self._last_salah_name_arabic_state = None
+        self.salah_name_transition_active = False
+        self.salah_name_transition_target_arabic = False
+        self.salah_name_transition_after_id = None
+        self.salah_name_transition_duration_ms = 280
+        self.salah_name_transition_progress = 1.0
+        self.salah_name_transition_tick_ms = 45
         
         # Jummah time (loaded from CSV or config/jummah.txt)
         self.jummah_time = None
@@ -526,6 +532,7 @@ class IslamicBackground:
             return
 
         self.canvas.delete('animated_stars')
+        bottom_star_cutoff = 0.82
 
         base_size = min(width, height) * 0.008
         star_points = [
@@ -549,6 +556,8 @@ class IslamicBackground:
         ]
 
         for sx, sy, scale in star_points:
+            if sy >= bottom_star_cutoff:
+                continue
             twinkle_phase = ((time.time() / self.star_twinkle_cycle_seconds) * (2 * math.pi)) + (sx * sy * 10)
             twinkle_t = 0.5 + (0.5 * math.sin(twinkle_phase))
             brightness = 0.4 + (0.6 * twinkle_t)
@@ -918,6 +927,7 @@ class IslamicBackground:
 
     def draw_ramadan_stars(self, width, height):
         """Draw sparse golden stars (sample-like)."""
+        bottom_star_cutoff = 0.82
         star_points = [
             (0.08, 0.20, 1.0), (0.18, 0.28, 0.7), (0.30, 0.22, 0.9), (0.43, 0.26, 0.8),
             (0.57, 0.21, 0.6), (0.69, 0.29, 0.9), (0.82, 0.23, 1.0), (0.90, 0.31, 0.7),
@@ -940,6 +950,8 @@ class IslamicBackground:
 
         base_size = min(width, height) * 0.008
         for sx, sy, scale in star_points:
+            if sy >= bottom_star_cutoff:
+                continue
             self.draw_small_star(width * sx, height * sy, base_size * scale, '#f2d675')
 
     def draw_ramadan_lanterns(self, width, height):
@@ -1286,15 +1298,15 @@ class IslamicBackground:
         theme_name = self.get_theme_name()
         if theme_name == 'modern':
             return {
-                'card_fill': '#f8fafc',
-                'card_outline': '#334155',
-                'card_current_fill': '#f59e0b',
-                'card_current_outline': '#b45309',
-                'title_text': '#0f172a',
-                'subtle_text': '#475569',
-                'athan_text': '#0f172a',
-                'iqamah_text': '#059669',
-                'shrouq_note_text': '#047857',
+                'card_fill': '#0f2d66',
+                'card_outline': '#4f75c0',
+                'card_current_fill': '#2a56ad',
+                'card_current_outline': '#c8dcff',
+                'title_text': '#f2f7ff',
+                'subtle_text': '#b7c8ee',
+                'athan_text': '#f8fbff',
+                'iqamah_text': '#bfead2',
+                'shrouq_note_text': '#97d9b8',
                 'next_panel_fill': '#ffffff',
                 'next_panel_outline': '#334155',
                 'next_prefix_text': '#0f172a',
@@ -1329,15 +1341,15 @@ class IslamicBackground:
             }
 
         return {
-            'card_fill': 'white',
-            'card_outline': '#2a5a8f',
-            'card_current_fill': '#ffb74d',
-            'card_current_outline': '#f57c00',
-            'title_text': '#1a3a5f',
-            'subtle_text': '#4a6a8f',
-            'athan_text': '#1a3a5f',
-            'iqamah_text': '#2a8a5f',
-            'shrouq_note_text': 'green',
+            'card_fill': '#0f2d66',
+            'card_outline': '#4f75c0',
+            'card_current_fill': '#2a56ad',
+            'card_current_outline': '#c8dcff',
+            'title_text': '#f2f7ff',
+            'subtle_text': '#b7c8ee',
+            'athan_text': '#f8fbff',
+            'iqamah_text': '#bfead2',
+            'shrouq_note_text': '#97d9b8',
             'next_panel_fill': 'white',
             'next_panel_outline': '#2a5a8f',
             'next_prefix_text': 'black',
@@ -1492,6 +1504,7 @@ class IslamicBackground:
 
     def draw_eid_star_fields(self, width, height, animated=False, tags=None, upper_stars=None, lower_stars=None):
         """Draw galaxy star fields, optionally animated for glow/dim/lighten."""
+        bottom_star_cutoff = 0.82
         exclusion_rects = []
         bounds = getattr(self, 'prayer_box_bounds', {}) or {}
         star_padding = self.us(18, 10)
@@ -1538,6 +1551,8 @@ class IslamicBackground:
 
         def _draw_star_group(star_list, base_size):
             for sx, sy, scale, base_color in star_list:
+                if sy >= bottom_star_cutoff:
+                    continue
                 px = width * sx
                 py = height * sy
 
@@ -2308,6 +2323,29 @@ class IslamicBackground:
             is_friday = (self.get_current_date().weekday() == 4)
             current_prayer = self.get_current_prayer(prayers_data)
 
+            show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+            rtl_mode = show_arabic
+            arabic_names = {
+                'Fajr': 'الفجر',
+                'Duhr': 'الظهر',
+                'Dhuhr': 'الظهر',
+                'Asr': 'العصر',
+                'Maghrib': 'المغرب',
+                'Isha': 'العشاء',
+                'Jummah': 'الجمعة',
+                'Shrouq': 'الشروق'
+            }
+
+            def localized_phrase(english_text, arabic_text):
+                return arabic_text if show_arabic else english_text
+
+            def localized_prayer_name(prayer_name):
+                english_name = (prayer_name or '---').upper()
+                arabic_name = arabic_names.get(prayer_name, '---')
+                if show_arabic and arabic_name != '---':
+                    return arabic_name
+                return english_name
+
             if current_prayer:
                 prayer_key = 'Duhr' if current_prayer == 'Jummah' else current_prayer
                 current_athan = self.parse_time(prayers_data.get(f'{prayer_key}Athan', ''))
@@ -2320,16 +2358,18 @@ class IslamicBackground:
                     if prayer_key == 'Duhr' and is_friday:
                         return {
                             'prefix_text': '',
-                            'name_text': 'JUMMAH KHUTBAH',
-                            'in_text': ' IN ',
-                            'countdown_text': self.get_countdown(current_iqamah)
+                            'name_text': localized_phrase('JUMMAH KHUTBAH', 'خطبة الجمعة'),
+                            'in_text': localized_phrase(' IN ', ' خلال '),
+                            'countdown_text': self.get_countdown(current_iqamah),
+                            'rtl': rtl_mode
                         }
 
                     return {
                         'prefix_text': '',
-                        'name_text': current_prayer.upper(),
-                        'in_text': ' IQAMAH IN ',
-                        'countdown_text': self.get_countdown(current_iqamah)
+                        'name_text': localized_prayer_name(current_prayer),
+                        'in_text': localized_phrase(' IQAMAH IN ', ' الإقامة خلال '),
+                        'countdown_text': self.get_countdown(current_iqamah),
+                        'rtl': rtl_mode
                     }
 
             next_prayer_name, next_athan = self.get_next_prayer(prayers_data)
@@ -2337,22 +2377,26 @@ class IslamicBackground:
             if is_friday and next_prayer_name == 'Jummah':
                 return {
                     'prefix_text': '',
-                    'name_text': 'JUMMAH KHUTBAH',
-                    'in_text': ' IN ',
-                    'countdown_text': self.get_countdown(next_athan)
+                    'name_text': localized_phrase('JUMMAH KHUTBAH', 'خطبة الجمعة'),
+                    'in_text': localized_phrase(' IN ', ' خلال '),
+                    'countdown_text': self.get_countdown(next_athan),
+                    'rtl': rtl_mode
                 }
             return {
-                'prefix_text': 'NEXT PRAYER: ',
-                'name_text': (next_prayer_name or '---').upper(),
-                'in_text': ' IN ',
-                'countdown_text': self.get_countdown(next_athan)
+                'prefix_text': localized_phrase('NEXT PRAYER: ', 'الصلاه القادمه \u200f:\u200f '),
+                'name_text': localized_prayer_name(next_prayer_name),
+                'in_text': localized_phrase(' IN ', ' خلال '),
+                'countdown_text': self.get_countdown(next_athan),
+                'rtl': rtl_mode
             }
         except:
+            show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
             return {
-                'prefix_text': 'NEXT PRAYER: ',
+                'prefix_text': 'الصلاه القادمه \u200f:\u200f ' if show_arabic else 'NEXT PRAYER: ',
                 'name_text': '---',
-                'in_text': ' IN ',
-                'countdown_text': '--:--:--'
+                'in_text': ' خلال ' if show_arabic else ' IN ',
+                'countdown_text': '--:--:--',
+                'rtl': show_arabic
             }
 
     def get_athan_blink_state(self, prayers_data):
@@ -2485,6 +2529,7 @@ class IslamicBackground:
                     name_text = display_data['name_text']
                     in_text = display_data['in_text']
                     countdown_text = display_data['countdown_text']
+                    rtl_mode = bool(display_data.get('rtl', False))
 
                     self.canvas.itemconfig(self.next_prayer_prefix_text_id, text=prefix_text, fill='black')
                     self.canvas.itemconfig(self.next_prayer_name_text_id, text=name_text, fill='#d32f2f')
@@ -2492,7 +2537,7 @@ class IslamicBackground:
                     self.canvas.itemconfig(self.countdown_text_id, text=countdown_text, fill='#2E7D32')
 
                     if self.next_prayer_line_x is not None and self.next_prayer_line_y is not None:
-                        text_parts = (prefix_text, name_text, in_text)
+                        text_parts = (prefix_text, name_text, in_text, rtl_mode)
                         if text_parts != self._next_prayer_last_text_parts:
                             prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
                             name_width = self.next_prayer_line_font.measure(name_text)
@@ -2511,6 +2556,7 @@ class IslamicBackground:
 
                         total_width = prefix_width + name_width + in_width + countdown_width
                         left_x = self.next_prayer_line_x - (total_width / 2)
+                        right_x = self.next_prayer_line_x + (total_width / 2)
 
                         # Keep panel width stable during per-second countdown ticks.
                         base_panel_width = self.next_prayer_static_width if self.next_prayer_static_width else max(260, total_width + (self.next_prayer_panel_padding_x * 2))
@@ -2536,10 +2582,24 @@ class IslamicBackground:
                             self.next_prayer_panel_width = panel_width
                             self.canvas.tag_lower(self.next_prayer_panel_id, self.next_prayer_prefix_text_id)
 
-                        self.canvas.coords(self.next_prayer_prefix_text_id, left_x, self.next_prayer_line_y)
-                        self.canvas.coords(self.next_prayer_name_text_id, left_x + prefix_width, self.next_prayer_line_y)
-                        self.canvas.coords(self.next_prayer_in_text_id, left_x + prefix_width + name_width, self.next_prayer_line_y)
-                        self.canvas.coords(self.countdown_text_id, left_x + prefix_width + name_width + in_width, self.next_prayer_line_y)
+                        if rtl_mode:
+                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, anchor='e')
+                            self.canvas.itemconfig(self.next_prayer_name_text_id, anchor='e')
+                            self.canvas.itemconfig(self.next_prayer_in_text_id, anchor='e')
+                            self.canvas.itemconfig(self.countdown_text_id, anchor='e')
+                            self.canvas.coords(self.next_prayer_prefix_text_id, right_x, self.next_prayer_line_y)
+                            self.canvas.coords(self.next_prayer_name_text_id, right_x - prefix_width, self.next_prayer_line_y)
+                            self.canvas.coords(self.next_prayer_in_text_id, right_x - prefix_width - name_width, self.next_prayer_line_y)
+                            self.canvas.coords(self.countdown_text_id, right_x - prefix_width - name_width - in_width, self.next_prayer_line_y)
+                        else:
+                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, anchor='w')
+                            self.canvas.itemconfig(self.next_prayer_name_text_id, anchor='w')
+                            self.canvas.itemconfig(self.next_prayer_in_text_id, anchor='w')
+                            self.canvas.itemconfig(self.countdown_text_id, anchor='w')
+                            self.canvas.coords(self.next_prayer_prefix_text_id, left_x, self.next_prayer_line_y)
+                            self.canvas.coords(self.next_prayer_name_text_id, left_x + prefix_width, self.next_prayer_line_y)
+                            self.canvas.coords(self.next_prayer_in_text_id, left_x + prefix_width + name_width, self.next_prayer_line_y)
+                            self.canvas.coords(self.countdown_text_id, left_x + prefix_width + name_width + in_width, self.next_prayer_line_y)
                 except:
                     pass
         except Exception as e:
@@ -2687,21 +2747,25 @@ class IslamicBackground:
             width = self.canvas.winfo_width()
             height = self.canvas.winfo_height()
             
-            # Keep pre-iqamah countdown on the original solid white background.
-            overlay_bg = self.canvas.create_rectangle(
-                -2, -2, width + 2, height + 2,
+            # Keep configured background visible and add a soft white veil for readability.
+            overlay_bg = self.draw_overlay_background(width, height, tags='iqamah_overlay')
+            self.iqamah_overlay_ids.append(overlay_bg)
+
+            readability_veil = self.canvas.create_rectangle(
+                0, 0, width, height,
                 fill='white',
+                stipple='gray75',
                 outline='',
                 tags='iqamah_overlay'
             )
-            self.iqamah_overlay_ids.append(overlay_bg)
+            self.iqamah_overlay_ids.append(readability_veil)
 
             # Live current time (top-left)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
             top_left_time = self.canvas.create_text(
                 self.us(36, 18), self.us(4, 2),
                 text=current_time_text,
-                font=('Arial', self.fs(38, 18), 'bold'),
+                font=('Arial', self.fs(50, 24), 'bold'),
                 fill='#1a3a5f',
                 anchor='nw',
                 tags=('iqamah_overlay', 'iqamah_overlay_current_time')
@@ -2810,12 +2874,22 @@ class IslamicBackground:
             overlay_bg = self.draw_overlay_background(width, height, tags='iqamah_overlay')
             self.iqamah_overlay_ids.append(overlay_bg)
 
+            # Add a soft white veil so text remains readable while background stays visible.
+            readability_veil = self.canvas.create_rectangle(
+                0, 0, width, height,
+                fill='white',
+                stipple='gray75',
+                outline='',
+                tags='iqamah_overlay'
+            )
+            self.iqamah_overlay_ids.append(readability_veil)
+
             # Live current time (top-left)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
             top_left_time = self.canvas.create_text(
                 self.us(36, 18), self.us(4, 2),
                 text=current_time_text,
-                font=('Arial', self.fs(38, 18), 'bold'),
+                font=('Arial', self.fs(50, 24), 'bold'),
                 fill='#1a3a5f',
                 anchor='nw',
                 tags=('iqamah_overlay', 'iqamah_overlay_current_time')
@@ -3602,8 +3676,16 @@ class IslamicBackground:
                     iqamah_time = iqamah_time + ' AM'
 
             show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
-            name_text = arabic if show_arabic_name else display_name
-            name_font = ('Arial', self.fs(32, 16), 'bold') if show_arabic_name else ('Arial', self.fs(30, 15), 'bold')
+            if show_arabic_name:
+                progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
+                start_size = self.fs(30, 15)
+                end_size = self.fs(32, 16)
+                size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
+                name_text = arabic
+                name_font = ('Arial', size, 'bold')
+            else:
+                name_text = display_name
+                name_font = ('Arial', self.fs(30, 15), 'bold')
 
             self.canvas.create_text(col_name_x, y1 + (row_h / 2), text=name_text, font=name_font, fill=palette['title_text'])
             self.draw_time_text_with_meridiem(col_athan_x, y1 + (row_h / 2), athan_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['athan_text'])
@@ -3645,8 +3727,16 @@ class IslamicBackground:
         
         # Rotating prayer name (English/Arabic)
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
-        name_text = arabic if show_arabic_name else name
-        name_font = ('Arial', self.fs(46, 24), 'bold') if show_arabic_name else ('Arial', self.fs(42, 21), 'bold')
+        if show_arabic_name:
+            progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
+            start_size = self.fs(42, 21)
+            end_size = self.fs(46, 24)
+            size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
+            name_text = arabic
+            name_font = ('Arial', size, 'bold')
+        else:
+            name_text = name
+            name_font = ('Arial', self.fs(42, 21), 'bold')
         self.canvas.create_text(
             x + width/2, y + self.us(42, 20),
             text=name_text,
@@ -3842,8 +3932,16 @@ class IslamicBackground:
         
         # Rotate only the top prayer name (JUMMAH <-> العربية); keep KHUTBAH in English
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
-        title_text = 'الجمعة' if show_arabic_name else 'JUMMAH'
-        title_font = ('Arial', self.fs(46, 24), 'bold') if show_arabic_name else ('Arial', self.fs(42, 21), 'bold')
+        if show_arabic_name:
+            progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
+            start_size = self.fs(42, 21)
+            end_size = self.fs(46, 24)
+            size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
+            title_text = 'الجمعة'
+            title_font = ('Arial', size, 'bold')
+        else:
+            title_text = 'JUMMAH'
+            title_font = ('Arial', self.fs(42, 21), 'bold')
         self.canvas.create_text(
             x + width/2, y + self.us(20, 10) + text_y_offset,
             text=title_text,
@@ -3900,8 +3998,16 @@ class IslamicBackground:
         
         # Rotating Shrouq name (English/Arabic)
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
-        title_text = 'الشروق' if show_arabic_name else 'SHROUQ'
-        title_font = ('Arial', self.fs(46, 24), 'bold') if show_arabic_name else ('Arial', self.fs(42, 21), 'bold')
+        if show_arabic_name:
+            progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
+            start_size = self.fs(42, 21)
+            end_size = self.fs(46, 24)
+            size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
+            title_text = 'الشروق'
+            title_font = ('Arial', size, 'bold')
+        else:
+            title_text = 'SHROUQ'
+            title_font = ('Arial', self.fs(42, 21), 'bold')
         self.canvas.create_text(
             x + width/2, y + self.us(42, 20),
             text=title_text,
@@ -4024,6 +4130,7 @@ class IslamicBackground:
         name_text = display_data['name_text']
         in_text = display_data['in_text']
         countdown_text = display_data['countdown_text']
+        rtl_mode = bool(display_data.get('rtl', False))
 
         line_size = int(self.next_prayer_line_font.cget('size'))
         prefix_size = int(self.next_prayer_prefix_font.cget('size'))
@@ -4074,35 +4181,65 @@ class IslamicBackground:
         self.next_prayer_static_width = panel_width
         self._next_prayer_last_text_parts = (prefix_text, name_text, in_text)
         self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
-
-        self.next_prayer_prefix_text_id = self.canvas.create_text(
-            left_x, line_center_y,
-            text=prefix_text,
-            font=prefix_font,
-            fill=palette['next_prefix_text'],
-            anchor='w'
-        )
-        self.next_prayer_name_text_id = self.canvas.create_text(
-            left_x + prefix_width, line_center_y,
-            text=name_text,
-            font=line_font,
-            fill=palette['next_name_text'],
-            anchor='w'
-        )
-        self.next_prayer_in_text_id = self.canvas.create_text(
-            left_x + prefix_width + name_width, line_center_y,
-            text=in_text,
-            font=line_font,
-            fill=palette['next_in_text'],
-            anchor='w'
-        )
-        self.countdown_text_id = self.canvas.create_text(
-            left_x + prefix_width + name_width + in_width, line_center_y,
-            text=countdown_text,
-            font=line_font,
-            fill=palette['next_countdown_text'],
-            anchor='w'
-        )
+        if rtl_mode:
+            right_x = x + (total_width / 2)
+            self.next_prayer_prefix_text_id = self.canvas.create_text(
+                right_x, line_center_y,
+                text=prefix_text,
+                font=prefix_font,
+                fill=palette['next_prefix_text'],
+                anchor='e'
+            )
+            self.next_prayer_name_text_id = self.canvas.create_text(
+                right_x - prefix_width, line_center_y,
+                text=name_text,
+                font=line_font,
+                fill=palette['next_name_text'],
+                anchor='e'
+            )
+            self.next_prayer_in_text_id = self.canvas.create_text(
+                right_x - prefix_width - name_width, line_center_y,
+                text=in_text,
+                font=line_font,
+                fill=palette['next_in_text'],
+                anchor='e'
+            )
+            self.countdown_text_id = self.canvas.create_text(
+                right_x - prefix_width - name_width - in_width, line_center_y,
+                text=countdown_text,
+                font=line_font,
+                fill=palette['next_countdown_text'],
+                anchor='e'
+            )
+        else:
+            self.next_prayer_prefix_text_id = self.canvas.create_text(
+                left_x, line_center_y,
+                text=prefix_text,
+                font=prefix_font,
+                fill=palette['next_prefix_text'],
+                anchor='w'
+            )
+            self.next_prayer_name_text_id = self.canvas.create_text(
+                left_x + prefix_width, line_center_y,
+                text=name_text,
+                font=line_font,
+                fill=palette['next_name_text'],
+                anchor='w'
+            )
+            self.next_prayer_in_text_id = self.canvas.create_text(
+                left_x + prefix_width + name_width, line_center_y,
+                text=in_text,
+                font=line_font,
+                fill=palette['next_in_text'],
+                anchor='w'
+            )
+            self.countdown_text_id = self.canvas.create_text(
+                left_x + prefix_width + name_width + in_width, line_center_y,
+                text=countdown_text,
+                font=line_font,
+                fill=palette['next_countdown_text'],
+                anchor='w'
+            )
 
         # Date row now appears under the translation area.
         current_date = self.get_current_date()
@@ -4145,10 +4282,12 @@ class IslamicBackground:
         else:
             hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
 
+        date_font = ('Arial', self.fs(42, 24), 'bold') if show_arabic_name else ('Arial', self.fs(36, 20), 'bold')
+
         self.canvas.create_text(
             x, date_block_y,
             text=f"{day_text} | {hijri_text} | {miladi_text}",
-            font=('Arial', self.fs(36, 20), 'bold'),
+            font=date_font,
             fill='white',
             anchor='n'
         )
@@ -4168,6 +4307,66 @@ class IslamicBackground:
     def schedule_prayer_time_toggle(self):
         """Schedule the prayer time toggle every 15 minutes"""
         self.update_prayer_time_toggle()
+
+    def _start_salah_name_transition(self, target_show_arabic):
+        """Switch language immediately; animate Arabic reveal without showing mixed text."""
+        target_show_arabic = bool(target_show_arabic)
+        self.salah_name_transition_target_arabic = target_show_arabic
+        self.salah_names_show_arabic = target_show_arabic
+        self._last_salah_name_arabic_state = target_show_arabic
+
+        if self.salah_name_transition_after_id is not None:
+            try:
+                self.root.after_cancel(self.salah_name_transition_after_id)
+            except:
+                pass
+
+        # English mode switches instantly; Arabic mode reveals smoothly.
+        if not target_show_arabic:
+            self.salah_name_transition_active = False
+            self.salah_name_transition_progress = 1.0
+            if not self.iqamah_overlay_visible:
+                self.redraw_full_display()
+            return
+
+        self.salah_name_transition_active = True
+        self.salah_name_transition_progress = 0.0
+
+        if not self.iqamah_overlay_visible:
+            self.redraw_full_display()
+
+        self.salah_name_transition_after_id = self.root.after(
+            self.salah_name_transition_tick_ms,
+            self._tick_salah_name_transition
+        )
+
+    def _tick_salah_name_transition(self):
+        """Advance Arabic reveal progress and request redraws."""
+        step = self.salah_name_transition_tick_ms / max(1, self.salah_name_transition_duration_ms)
+        self.salah_name_transition_progress = min(1.0, self.salah_name_transition_progress + step)
+
+        if not self.iqamah_overlay_visible:
+            self.redraw_full_display()
+
+        if self.salah_name_transition_progress >= 1.0:
+            self._finish_salah_name_transition()
+            return
+
+        self.salah_name_transition_after_id = self.root.after(
+            self.salah_name_transition_tick_ms,
+            self._tick_salah_name_transition
+        )
+
+    def _finish_salah_name_transition(self):
+        """Finalize transition state."""
+        self.salah_name_transition_after_id = None
+        self.salah_name_transition_active = False
+        self.salah_name_transition_progress = 1.0
+        self.salah_names_show_arabic = self.salah_name_transition_target_arabic
+        self._last_salah_name_arabic_state = self.salah_names_show_arabic
+
+        if not self.iqamah_overlay_visible:
+            self.redraw_full_display()
 
     def update_salah_name_rotation_state(self):
         """Show Arabic prayer names briefly on a configurable cadence, otherwise default to English."""
@@ -4193,11 +4392,11 @@ class IslamicBackground:
             self.salah_names_show_arabic = show_arabic
             return
 
+        if self.salah_name_transition_active:
+            return
+
         if show_arabic != self._last_salah_name_arabic_state:
-            self._last_salah_name_arabic_state = show_arabic
-            self.salah_names_show_arabic = show_arabic
-            if not self.iqamah_overlay_visible:
-                self.redraw_full_display()
+            self._start_salah_name_transition(show_arabic)
     
     def update_prayer_time_toggle(self):
         """Toggle between today's and tomorrow's Iqamah times - DISABLED"""
