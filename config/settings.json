@@ -8,6 +8,7 @@
   "display_program": "no",
   "program_show": 60,
   "program_show_duration": 15,
+  "theme": "elegent",
   "layout_style": "moon",
   "ticker_enabled": "yes",
   "ticker_speed": 5,
