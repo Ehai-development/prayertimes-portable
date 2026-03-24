@@ -1169,6 +1169,9 @@ class IslamicBackground:
         # Snap to nearest valid stipple
         nearest = min(stipple_map.keys(), key=lambda k: abs(k - opacity_val))
         self.overlay_stipple = stipple_map[nearest]
+
+        # Announcement ribbon background color
+        self.announcement_bg_color = str(self.config.get('announcementbgcolor', '#0a1128')).strip()
         
         # Load location/address from address.txt if available
         address_path = config_dir / 'address.txt'
@@ -4653,8 +4656,8 @@ class IslamicBackground:
         # Draw dark navy rectangle background
         self.canvas.create_rectangle(
             x, y, x + width, y + height,
-            fill='#0a1128',  # Dark navy blue
-            outline='#162040',  # Slightly lighter navy border
+            fill=self.announcement_bg_color,
+            outline='#162040',
             width=self.us(2, 1)
         )
         

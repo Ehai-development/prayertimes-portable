@@ -23,6 +23,7 @@
   "showlogo": "no",
   "hidenewstape": 30,
   "countandprayeropacity": 50,
+  "announcementbgcolor": "#0a1128",
   "testing": {
     "enabled": false,
     "iqamah_testing": false,
