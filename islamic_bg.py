@@ -184,6 +184,11 @@ class IslamicBackground:
         self.ribbon_width = 0
         self.ribbon_height = 0
         
+        # News tape hide/show cycle
+        self.news_tape_hidden = False
+        self.news_tape_hide_start = 0  # time.time() when hide began
+        self.news_tape_hide_duration = 30  # seconds, loaded from config
+        
         # Tracking for prayer time changes (tomorrow vs today)
         self.changing_prayers = {}  # {prayer_name: {today: time, tomorrow: time}}
         self.announcement_scroll_complete = False
@@ -224,26 +229,29 @@ class IslamicBackground:
         self.test_mode_box_id = None
         self.test_mode_label_id = None
         self.test_mode_info_id = None
+
+        # Default show_logs to False (overridden by load_config if showlogs=yes)
+        self.show_logs = False
         
         # Load prayer times AFTER initializing tracking
         try:
-            print("[STARTUP] Loading configuration...", flush=True)
+            self._log("[STARTUP] Loading configuration...", flush=True)
             self.load_config()
-            print("[STARTUP] Loading prayer times...", flush=True)
+            self._log("[STARTUP] Loading prayer times...", flush=True)
             self.load_prayer_times()
-            print("[STARTUP] Loading Jummah time...", flush=True)
+            self._log("[STARTUP] Loading Jummah time...", flush=True)
             self.load_jummah_time()
-            print("[STARTUP] Loading announcements...", flush=True)
+            self._log("[STARTUP] Loading announcements...", flush=True)
             self.load_announcements()
             
             # Check for prayer changes early so toggle starts with data ready
-            print("[STARTUP] Checking for upcoming prayer changes...", flush=True)
+            self._log("[STARTUP] Checking for upcoming prayer changes...", flush=True)
             self.check_upcoming_changes()  # Check for changes 3+ days ahead (must be first)
-            print("[STARTUP] Checking for tomorrow's prayer changes...", flush=True)
+            self._log("[STARTUP] Checking for tomorrow's prayer changes...", flush=True)
             self.check_prayer_changes()  # Check for tomorrow's changes (depends on upcoming_changes)
             
             # Start the countdown update loop
-            print("[STARTUP] Starting update schedulers...", flush=True)
+            self._log("[STARTUP] Starting update schedulers...", flush=True)
             self.schedule_countdown_update()
             if not TEST_MODE:
                 self.schedule_announcement_update()
@@ -256,17 +264,22 @@ class IslamicBackground:
                 self.schedule_test_mode_update()  # Update test mode indicator time
             
             # Initial draw on startup
-            print("[STARTUP] Drawing initial display...", flush=True)
+            self._log("[STARTUP] Drawing initial display...", flush=True)
             self.root.after(100, self.initial_draw)
             self.root.after(self.lantern_pulse_tick_ms, self.schedule_lantern_pulse_animation)
             self.root.after(self.star_twinkle_tick_ms, self.schedule_star_twinkle_animation)
             self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
         except Exception as e:
-            print(f"[ERROR] Startup failed: {e}", flush=True)
+            self._log(f"[ERROR] Startup failed: {e}", flush=True)
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
             import sys
             sys.exit(1)
+
+    def _log(self, *args, **kwargs):
+        """Print only when showlogs is enabled in settings."""
+        if getattr(self, 'show_logs', False):
+            print(*args, **kwargs)
 
     def set_ui_scale(self, width, height):
         """Update uniform UI scale based on current canvas size."""
@@ -312,12 +325,12 @@ class IslamicBackground:
             try:
                 mocked_date = datetime.strptime(TEST_DATE, "%Y-%m-%d").date()
                 if not self._test_mode_date_logged:
-                    print(f"[DATE] TEST MODE: Using mocked date {mocked_date} (System date: {datetime.now().date()})")
+                    self._log(f"[DATE] TEST MODE: Using mocked date {mocked_date} (System date: {datetime.now().date()})")
                     self._test_mode_date_logged = True
                 return mocked_date
             except:
                 if not self._test_mode_date_error_logged:
-                    print(f"Invalid TEST_DATE format: {TEST_DATE}. Using system date.")
+                    self._log(f"Invalid TEST_DATE format: {TEST_DATE}. Using system date.")
                     self._test_mode_date_error_logged = True
                 return datetime.now().date()
         return datetime.now().date()
@@ -339,7 +352,7 @@ class IslamicBackground:
                     return base_time.time()
             except:
                 if not self._test_mode_time_error_logged:
-                    print(f"Invalid TEST_TIME format: {TEST_TIME}. Using system time.")
+                    self._log(f"Invalid TEST_TIME format: {TEST_TIME}. Using system time.")
                     self._test_mode_time_error_logged = True
                 return datetime.now().time()
         return datetime.now().time()
@@ -352,7 +365,7 @@ class IslamicBackground:
         self._date_rollover_refresh_in_progress = True
         try:
             self._last_seen_date = new_date
-            print(f"[DATE] Day changed to {new_date}; refreshing display/data...")
+            self._log(f"[DATE] Day changed to {new_date}; refreshing display/data...")
 
             if self.iqamah_overlay_visible:
                 self.hide_iqamah_overlay()
@@ -363,7 +376,7 @@ class IslamicBackground:
             self.check_prayer_changes()
             self.redraw_full_display()
         except Exception as e:
-            print(f"ERROR in handle_date_rollover: {e}")
+            self._log(f"ERROR in handle_date_rollover: {e}")
         finally:
             self._date_rollover_refresh_in_progress = False
     
@@ -381,14 +394,14 @@ class IslamicBackground:
             # Draw prayer times first (fast) - skip heavy background rendering
             self.draw_prayer_times()
             self.draw_test_mode_indicator()  # Show test mode info if enabled
-            print("[STARTUP] [OK] App startup complete - rendering background...")
+            self._log("[STARTUP] [OK] App startup complete - rendering background...")
             
             # Defer Islamic background generation to after window is visible
             self.root.after(100, self._generate_and_apply_background_deferred)
         except Exception as e:
-            print(f"ERROR in initial_draw: {e}")
+            self._log(f"ERROR in initial_draw: {e}")
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
     
     def _generate_and_apply_background_deferred(self):
         """Generate and apply Islamic background after window is visible"""
@@ -402,11 +415,11 @@ class IslamicBackground:
             # Keep overlays above foreground content
             self.canvas.tag_raise('iqamah_overlay')
             
-            print("[STARTUP] Background rendering complete!")
+            self._log("[STARTUP] Background rendering complete!")
         except Exception as e:
-            print(f"ERROR in _generate_and_apply_background_deferred: {e}")
+            self._log(f"ERROR in _generate_and_apply_background_deferred: {e}")
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
         
     def on_resize(self, event):
         """Redraw when window is resized"""
@@ -433,7 +446,7 @@ class IslamicBackground:
                 return
             self.redraw_full_display()
         except Exception as e:
-            print(f"ERROR in _perform_resize_redraw: {e}")
+            self._log(f"ERROR in _perform_resize_redraw: {e}")
 
     def redraw_full_display(self):
         """Redraw full canvas in correct z-order."""
@@ -455,7 +468,7 @@ class IslamicBackground:
             if self.is_ramadan(self.get_current_date()) and not self.iqamah_overlay_visible and not self._is_full_redraw:
                 self.update_lanterns_only()
         except Exception as e:
-            print(f"ERROR in schedule_lantern_pulse_animation: {e}")
+            self._log(f"ERROR in schedule_lantern_pulse_animation: {e}")
         finally:
             try:
                 self.root.after(self.lantern_pulse_tick_ms, self.schedule_lantern_pulse_animation)
@@ -468,7 +481,7 @@ class IslamicBackground:
             if self.is_ramadan(self.get_current_date()) and not self.iqamah_overlay_visible and not self._is_full_redraw:
                 self.update_stars_only()
         except Exception as e:
-            print(f"ERROR in schedule_star_twinkle_animation: {e}")
+            self._log(f"ERROR in schedule_star_twinkle_animation: {e}")
         finally:
             try:
                 self.root.after(self.star_twinkle_tick_ms, self.schedule_star_twinkle_animation)
@@ -481,7 +494,7 @@ class IslamicBackground:
             if (not self.is_ramadan(self.get_current_date())) and not self.iqamah_overlay_visible and not self._is_full_redraw:
                 self.update_eid_effects_only()
         except Exception as e:
-            print(f"ERROR in schedule_eid_animation: {e}")
+            self._log(f"ERROR in schedule_eid_animation: {e}")
         finally:
             try:
                 self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
@@ -526,6 +539,7 @@ class IslamicBackground:
 
     def update_stars_only(self):
         """Update only star visuals with twinkling effect without redrawing entire display."""
+        return  # Stars disabled
         width = self.canvas.winfo_width()
         height = self.canvas.winfo_height()
         if width <= 1 or height <= 1:
@@ -927,6 +941,7 @@ class IslamicBackground:
 
     def draw_ramadan_stars(self, width, height):
         """Draw sparse golden stars (sample-like)."""
+        return  # Stars disabled
         bottom_star_cutoff = 0.82
         star_points = [
             (0.08, 0.20, 1.0), (0.18, 0.28, 0.7), (0.30, 0.22, 0.9), (0.43, 0.26, 0.8),
@@ -1066,7 +1081,7 @@ class IslamicBackground:
             with open(config_path, 'r', encoding='utf-8') as f:
                 self.config = json.load(f)
         except Exception as e:
-            print(f"Error loading config: {e}")
+            self._log(f"Error loading config: {e}")
             self.config = {
                 "data_file": "prayer_times.csv",
                 "location": "MASJID AL-SALAM",
@@ -1128,6 +1143,32 @@ class IslamicBackground:
         except:
             shrouq_plus_minutes = 10
         self.config['shrouqplus'] = shrouq_plus_minutes
+
+        # Show logs (console print output) - default No
+        showlogs_val = str(self.config.get('showlogs', 'no')).strip().lower()
+        self.show_logs = showlogs_val in ('yes', 'true', '1')
+
+        # Show logo images - default No
+        showlogo_val = str(self.config.get('showlogo', 'no')).strip().lower()
+        self.show_logo = showlogo_val in ('yes', 'true', '1')
+
+        # News tape hide duration in seconds (0 = never hide)
+        try:
+            hide_tape = int(self.config.get('hidenewstape', 30))
+            hide_tape = max(0, hide_tape)
+        except:
+            hide_tape = 30
+        self.news_tape_hide_duration = hide_tape
+
+        # Overlay opacity for iqamah countdown & prayer now (12, 25, 50, 75)
+        try:
+            opacity_val = int(self.config.get('countandprayeropacity', 50))
+        except:
+            opacity_val = 50
+        stipple_map = {12: 'gray12', 25: 'gray25', 50: 'gray50', 75: 'gray75'}
+        # Snap to nearest valid stipple
+        nearest = min(stipple_map.keys(), key=lambda k: abs(k - opacity_val))
+        self.overlay_stipple = stipple_map[nearest]
         
         # Load location/address from address.txt if available
         address_path = config_dir / 'address.txt'
@@ -1138,7 +1179,7 @@ class IslamicBackground:
                     if address:
                         self.config['location'] = address
         except Exception as e:
-            print(f"Error loading address: {e}")
+            self._log(f"Error loading address: {e}")
         
         # Load masjid name from masjid.txt if available
         masjid_path = config_dir / 'masjid.txt'
@@ -1149,7 +1190,7 @@ class IslamicBackground:
                     if masjid_name:
                         self.config['masjid_name'] = masjid_name
         except Exception as e:
-            print(f"Error loading masjid name: {e}")
+            self._log(f"Error loading masjid name: {e}")
 
     def get_config_dir(self):
         """Resolve config directory from runtime location, cwd, then source location."""
@@ -1170,7 +1211,22 @@ class IslamicBackground:
         return Path(__file__).resolve().parent / 'config'
 
     def get_background_image_path(self):
-        """Resolve configured background image path from absolute or relative locations."""
+        """Resolve background image path. Rotates daily through images/background/ folder if it exists."""
+        app_dir = Path(__file__).resolve().parent
+        bg_folder = app_dir / 'images' / 'background'
+        
+        # Daily rotation from images/background/ folder
+        if bg_folder.is_dir():
+            bg_images = sorted([
+                f for f in bg_folder.iterdir()
+                if f.is_file() and f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
+            ])
+            if bg_images:
+                day_of_year = self.get_current_date().timetuple().tm_yday
+                chosen = bg_images[day_of_year % len(bg_images)]
+                return chosen.resolve()
+
+        # Fallback to configured background_image setting
         image_setting = str(self.config.get('background_image', '')).strip()
         if not image_setting:
             return None
@@ -1195,7 +1251,7 @@ class IslamicBackground:
             if candidate.exists() and candidate.is_file():
                 return candidate.resolve()
 
-        print(f"Warning: background image not found: {image_setting}")
+        self._log(f"Warning: background image not found: {image_setting}")
         return None
 
     def draw_background_image(self, width, height):
@@ -1212,7 +1268,7 @@ class IslamicBackground:
                 self.background_image_size = (0, 0)
                 self.background_photo_image = None
             except Exception as e:
-                print(f"Warning: unable to load background image '{image_path_str}': {e}")
+                self._log(f"Warning: unable to load background image '{image_path_str}': {e}")
                 self.background_base_image = None
                 self.background_photo_image = None
                 self.background_image_size = (0, 0)
@@ -1232,7 +1288,7 @@ class IslamicBackground:
                 self.background_photo_image = ImageTk.PhotoImage(resized)
                 self.background_image_size = (width, height)
             except Exception as e:
-                print(f"Warning: unable to resize background image '{image_path_str}': {e}")
+                self._log(f"Warning: unable to resize background image '{image_path_str}': {e}")
                 return False
 
         self.canvas.create_image(0, 0, image=self.background_photo_image, anchor='nw')
@@ -1250,7 +1306,7 @@ class IslamicBackground:
                     self.background_image_size = (0, 0)
                     self.background_photo_image = None
                 except Exception as e:
-                    print(f"Warning: unable to load background image '{image_path_str}': {e}")
+                    self._log(f"Warning: unable to load background image '{image_path_str}': {e}")
                     self.background_base_image = None
                     self.background_photo_image = None
                     self.background_image_size = (0, 0)
@@ -1266,7 +1322,7 @@ class IslamicBackground:
                         self.background_photo_image = ImageTk.PhotoImage(resized)
                         self.background_image_size = (width, height)
                     except Exception as e:
-                        print(f"Warning: unable to resize background image '{image_path_str}': {e}")
+                        self._log(f"Warning: unable to resize background image '{image_path_str}': {e}")
                         self.background_photo_image = None
 
                 if self.background_photo_image is not None:
@@ -1504,6 +1560,7 @@ class IslamicBackground:
 
     def draw_eid_star_fields(self, width, height, animated=False, tags=None, upper_stars=None, lower_stars=None):
         """Draw galaxy star fields, optionally animated for glow/dim/lighten."""
+        return  # Stars disabled
         bottom_star_cutoff = 0.82
         exclusion_rects = []
         bounds = getattr(self, 'prayer_box_bounds', {}) or {}
@@ -1579,6 +1636,7 @@ class IslamicBackground:
 
     def draw_eid_upper_glow_decor(self, width, height):
         """Draw glowing stars and crescents in the upper section."""
+        return  # Stars disabled
         upper_band_y = height * 0.19
 
         crescents = [
@@ -1802,12 +1860,12 @@ class IslamicBackground:
                             self.prayer_data[date] = merged_row
                             ramadan_overrides += 1
 
-            print(f"Loaded {base_count} base prayer entries from {base_csv_path.name}")
-            print(f"[RAMADAN] Applied {ramadan_overrides} Ramadan overrides from {ramadan_csv_path.name}")
-            print(f"Total active prayer entries: {len(self.prayer_data)}")
+            self._log(f"Loaded {base_count} base prayer entries from {base_csv_path.name}")
+            self._log(f"[RAMADAN] Applied {ramadan_overrides} Ramadan overrides from {ramadan_csv_path.name}")
+            self._log(f"Total active prayer entries: {len(self.prayer_data)}")
 
         except Exception as e:
-            print(f"Error loading prayer times: {e}")
+            self._log(f"Error loading prayer times: {e}")
             self.prayer_data = {}
     
     def load_jummah_time(self):
@@ -1818,22 +1876,22 @@ class IslamicBackground:
 
             if not jummah_file.exists():
                 jummah_file.write_text('1:30 PM', encoding='utf-8')
-                print("[JUMMAH] Created config/jummah.txt with default time 1:30 PM")
+                self._log("[JUMMAH] Created config/jummah.txt with default time 1:30 PM")
 
             jummah_time_str = jummah_file.read_text(encoding='utf-8').strip() or '1:30 PM'
             parsed_jummah = self.parse_time(jummah_time_str)
 
             if parsed_jummah:
                 self.jummah_time = parsed_jummah
-                print(f"[JUMMAH] Using Jummah time from config/jummah.txt: {jummah_time_str}")
+                self._log(f"[JUMMAH] Using Jummah time from config/jummah.txt: {jummah_time_str}")
             else:
                 self.jummah_time = self.parse_time('1:30 PM')
-                print(f"[JUMMAH] Invalid jummah.txt value '{jummah_time_str}', using default 1:30 PM")
+                self._log(f"[JUMMAH] Invalid jummah.txt value '{jummah_time_str}', using default 1:30 PM")
 
         except Exception as e:
-            print(f"[ERROR] Failed to load Jummah time: {e}")
+            self._log(f"[ERROR] Failed to load Jummah time: {e}")
             self.jummah_time = self.parse_time('1:30 PM')
-            print("[JUMMAH] Using default Jummah time: 1:30 PM")
+            self._log("[JUMMAH] Using default Jummah time: 1:30 PM")
     
     def load_announcements(self):
         """Load announcements from announcements.txt (always)."""
@@ -1843,9 +1901,9 @@ class IslamicBackground:
 
         config_dir = self.get_config_dir()
         announcements_path = config_dir / 'announcements.txt'
-        print(f"[ANNOUNCEMENTS] Loading from {announcements_path}")
+        self._log(f"[ANNOUNCEMENTS] Loading from {announcements_path}")
         if announcements_path.exists():
-            print(f"[ANNOUNCEMENTS] Last modified: {datetime.fromtimestamp(announcements_path.stat().st_mtime)}")
+            self._log(f"[ANNOUNCEMENTS] Last modified: {datetime.fromtimestamp(announcements_path.stat().st_mtime)}")
         
         try:
             with open(announcements_path, 'r', encoding='utf-8') as f:
@@ -1905,14 +1963,14 @@ class IslamicBackground:
                     self.announcements.append((text, color))
                 
                 if not self.announcements:
-                    print("[ANNOUNCEMENTS] No announcements found; red ribbon will be hidden")
+                    self._log("[ANNOUNCEMENTS] No announcements found; red ribbon will be hidden")
                     
-                print(f"Loaded {len(self.announcements)} announcements with colors from {announcements_path.name}")
+                self._log(f"Loaded {len(self.announcements)} announcements with colors from {announcements_path.name}")
                 for text, color in self.announcements:
-                    print(f"  - '{text}' (color: {color})")
+                    self._log(f"  - '{text}' (color: {color})")
                     
         except Exception as e:
-            print(f"Error loading announcements: {e}")
+            self._log(f"Error loading announcements: {e}")
             self.announcements = []
         
         # Initialize tracking for scrolling
@@ -2365,9 +2423,9 @@ class IslamicBackground:
                         }
 
                     return {
-                        'prefix_text': '',
+                        'prefix_text': localized_phrase('', 'اقامة '),
                         'name_text': localized_prayer_name(current_prayer),
-                        'in_text': localized_phrase(' IQAMAH IN ', ' الإقامة خلال '),
+                        'in_text': localized_phrase(' IQAMAH IN ', ' خلال '),
                         'countdown_text': self.get_countdown(current_iqamah),
                         'rtl': rtl_mode
                     }
@@ -2383,7 +2441,7 @@ class IslamicBackground:
                     'rtl': rtl_mode
                 }
             return {
-                'prefix_text': localized_phrase('NEXT PRAYER: ', 'الصلاه القادمه \u200f:\u200f '),
+                'prefix_text': localized_phrase('NEXT PRAYER: ', 'الصلاة القادمة \u200f:\u200f '),
                 'name_text': localized_prayer_name(next_prayer_name),
                 'in_text': localized_phrase(' IN ', ' خلال '),
                 'countdown_text': self.get_countdown(next_athan),
@@ -2392,7 +2450,7 @@ class IslamicBackground:
         except:
             show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
             return {
-                'prefix_text': 'الصلاه القادمه \u200f:\u200f ' if show_arabic else 'NEXT PRAYER: ',
+                'prefix_text': 'الصلاة القادمة \u200f:\u200f ' if show_arabic else 'NEXT PRAYER: ',
                 'name_text': '---',
                 'in_text': ' خلال ' if show_arabic else ' IN ',
                 'countdown_text': '--:--:--',
@@ -2603,7 +2661,7 @@ class IslamicBackground:
                 except:
                     pass
         except Exception as e:
-            print(f"ERROR in update_countdown: {e}")
+            self._log(f"ERROR in update_countdown: {e}")
         
         # Schedule next update in 1000ms (1 second)
         try:
@@ -2618,7 +2676,7 @@ class IslamicBackground:
                 now_ts = datetime.now().timestamp()
                 if now_ts - last_ts >= 2:
                     self._perf_last_log['update_countdown'] = now_ts
-                    print(f"[PERF] update_countdown slow: {elapsed_ms:.1f}ms")
+                    self._log(f"[PERF] update_countdown slow: {elapsed_ms:.1f}ms")
     
     def schedule_iqamah_countdown_check(self):
         """Schedule the Iqamah countdown overlay check to run every second"""
@@ -2722,9 +2780,9 @@ class IslamicBackground:
                     self.hide_iqamah_overlay()
         
         except Exception as e:
-            print(f"ERROR in check_iqamah_countdown: {e}")
+            self._log(f"ERROR in check_iqamah_countdown: {e}")
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
         
         # Schedule next check in 1000ms (1 second)
         try:
@@ -2739,7 +2797,7 @@ class IslamicBackground:
                 now_ts = datetime.now().timestamp()
                 if now_ts - last_ts >= 2:
                     self._perf_last_log['check_iqamah_countdown'] = now_ts
-                    print(f"[PERF] check_iqamah_countdown slow: {elapsed_ms:.1f}ms")
+                    self._log(f"[PERF] check_iqamah_countdown slow: {elapsed_ms:.1f}ms")
     
     def show_iqamah_overlay(self):
         """Show the full-screen Iqamah countdown overlay"""
@@ -2754,7 +2812,7 @@ class IslamicBackground:
             readability_veil = self.canvas.create_rectangle(
                 0, 0, width, height,
                 fill='white',
-                stipple='gray75',
+                stipple=self.overlay_stipple,
                 outline='',
                 tags='iqamah_overlay'
             )
@@ -2860,9 +2918,9 @@ class IslamicBackground:
             self.iqamah_overlay_mode = 'countdown'
             
         except Exception as e:
-            print(f"ERROR in show_iqamah_overlay: {e}")
+            self._log(f"ERROR in show_iqamah_overlay: {e}")
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
 
     def show_post_iqamah_overlay(self):
         """Show post-iqamah overlay for 3 minutes with ayah and prayer notice."""
@@ -2878,7 +2936,7 @@ class IslamicBackground:
             readability_veil = self.canvas.create_rectangle(
                 0, 0, width, height,
                 fill='white',
-                stipple='gray75',
+                stipple=self.overlay_stipple,
                 outline='',
                 tags='iqamah_overlay'
             )
@@ -2938,9 +2996,9 @@ class IslamicBackground:
             self.iqamah_overlay_mode = 'post'
 
         except Exception as e:
-            print(f"ERROR in show_post_iqamah_overlay: {e}")
+            self._log(f"ERROR in show_post_iqamah_overlay: {e}")
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
 
     def clear_iqamah_overlay_items(self):
         """Delete overlay canvas items while preserving overlay state variables."""
@@ -2967,7 +3025,7 @@ class IslamicBackground:
             self.current_prayer_name = None
             
         except Exception as e:
-            print(f"ERROR in hide_iqamah_overlay: {e}")
+            self._log(f"ERROR in hide_iqamah_overlay: {e}")
 
     def draw_no_phone_icon(self, center_x, center_y, size=78, tags='iqamah_overlay'):
         """Draw a no-phone icon (phone + red prohibition ring/slash) and return canvas IDs."""
@@ -3074,7 +3132,7 @@ class IslamicBackground:
                 self.canvas.itemconfig(time_items[0], text=self.get_current_time().strftime('%I:%M:%S %p'))
                 self.canvas.coords(time_items[0], self.us(36, 18), self.us(4, 2))
         except Exception as e:
-            print(f"ERROR in update_iqamah_overlay_countdown: {e}")
+            self._log(f"ERROR in update_iqamah_overlay_countdown: {e}")
 
     def get_iqamah_change_notice_text(self):
         """Return one-day-before iqamah change notice for current prayer, else None."""
@@ -3118,7 +3176,7 @@ class IslamicBackground:
             
             return f"{minutes:02d}:{seconds:02d}"
         except Exception as e:
-            print(f"ERROR in get_iqamah_countdown: {e}")
+            self._log(f"ERROR in get_iqamah_countdown: {e}")
             return '00:00'
     
     def schedule_test_mode_update(self):
@@ -3167,9 +3225,9 @@ class IslamicBackground:
         # Draw logo in top-right corner
         self.draw_top_right_logo(width, height)
         
-        # Draw masjid name (larger)
+        # Draw masjid name below the ayah and translation
         self.draw_outlined_text(
-            width / 2, self.us(35),
+            width / 2, self.us(185),
             text=masjid_name,
             font=('Arial', self.fs(44, 18), 'bold'),
             fill='white'
@@ -3177,6 +3235,8 @@ class IslamicBackground:
 
     def draw_top_right_logo(self, width, height):
         """Draw the configured logo image at the top-right and top-left corners."""
+        if not getattr(self, 'show_logo', False):
+            return
         try:
             target_size = (self.us(300), self.us(200))
             images_dir = Path(__file__).parent / 'images'
@@ -3248,7 +3308,7 @@ class IslamicBackground:
                         anchor='center'
                     )
         except Exception as e:
-            print(f"ERROR in draw_top_right_logo: {e}")
+            self._log(f"ERROR in draw_top_right_logo: {e}")
 
     def draw_outlined_text(self, x, y, text, font, fill='white', outline='black', outline_px=2, **kwargs):
         """Draw text with a simple outline by layering offset shadow copies."""
@@ -3341,13 +3401,9 @@ class IslamicBackground:
         verse = "إِنَّ الصَّلَاةَ كَانَتْ عَلَى الْمُؤْمِنِينَ كِتَابًا مَوْقُوتًا"
         translation = "Prayer has been decreed upon the believers at specific times."
         
-        # Display the verse below the masjid name
-        # Calculate position - moved to header area where address was
-        verse_y = self.us(140)
-        
-        # Verse text positioning and styling
-        arabic_font_size = self.fs(48, 22)
-        verse_text_y = verse_y - self.us(24, 12)
+        # Ayah at top, translation below, masjid name drawn in draw_header
+        arabic_font_size = self.fs(62, 28)
+        verse_text_y = self.us(55)
         self.draw_outlined_text(
             width / 2, verse_text_y,
             text=verse,
@@ -3359,12 +3415,12 @@ class IslamicBackground:
             justify='center'
         )
         
-        # Draw the English translation text (smaller text)
-        translation_y = verse_y + self.us(35)
+        # Draw the English translation text below the ayah
+        translation_y = self.us(120)
         self.draw_outlined_text(
             width / 2, translation_y,
             text=translation,
-            font=('Arial', self.fs(24, 13)),
+            font=('Arial', self.fs(32, 16)),
             fill='#ffffff',  # White color for translation
             outline='black',
             outline_px=self.us(1, 1),
@@ -3377,9 +3433,9 @@ class IslamicBackground:
         try:
             return self._draw_prayer_times_impl()
         except Exception as e:
-            print(f"ERROR in draw_prayer_times: {e}")
+            self._log(f"ERROR in draw_prayer_times: {e}")
             import traceback
-            traceback.print_exc()
+            if getattr(self, 'show_logs', False): traceback.print_exc()
             return
     
     def _draw_prayer_times_impl(self):
@@ -4408,7 +4464,7 @@ class IslamicBackground:
             # Still increment counter for compatibility
             self.tomorrow_time_toggle_counter += 1
         except Exception as e:
-            print(f"ERROR in update_prayer_time_toggle: {e}")
+            self._log(f"ERROR in update_prayer_time_toggle: {e}")
         
         # Schedule next check (disabled behavior, keep low frequency)
         try:
@@ -4429,7 +4485,7 @@ class IslamicBackground:
             state = 'normal' if self.ribbon_visible else 'hidden'
             self.canvas.itemconfig('prayer_change_ribbon', state=state)
         except Exception as e:
-            print(f"ERROR in update_ribbon_cycle: {e}")
+            self._log(f"ERROR in update_ribbon_cycle: {e}")
         
         # Schedule next update in 1 second
         try:
@@ -4456,9 +4512,9 @@ class IslamicBackground:
             if not self.iqamah_overlay_visible:
                 self.redraw_full_display()
             
-            print("CSV reloaded - prayer/announcement data updated")
+            self._log("CSV reloaded - prayer/announcement data updated")
         except Exception as e:
-            print(f"ERROR in update_csv_reload: {e}")
+            self._log(f"ERROR in update_csv_reload: {e}")
         
         # Schedule next reload in 60 seconds (60000ms)
         try:
@@ -4590,12 +4646,15 @@ class IslamicBackground:
         # Note: If no changes, the yellow ribbon won't be drawn at all
     
     def draw_announcement_ribbon(self, x, y, width, height):
-        """Draw a red announcement ribbon for news ticker with all announcements"""
-        # Draw red rectangle background
+        """Draw announcement ribbon for news ticker with all announcements"""
+        # Skip drawing if news tape is in hidden phase
+        if self.news_tape_hidden:
+            return
+        # Draw dark navy rectangle background
         self.canvas.create_rectangle(
             x, y, x + width, y + height,
-            fill='#d32f2f',  # Red
-            outline='#b71c1c',  # Darker red border
+            fill='#0a1128',  # Dark navy blue
+            outline='#162040',  # Slightly lighter navy border
             width=self.us(2, 1)
         )
         
@@ -4648,7 +4707,7 @@ class IslamicBackground:
                 # Add significant spacing after each announcement
                 current_x += text_width + self.us(80, 24)
                 
-            print(f"Created {len(self.announcement_text_ids)} announcement text objects")
+            self._log(f"Created {len(self.announcement_text_ids)} announcement text objects")
             # Debug output disabled to avoid Unicode encoding issues
             # for i, (tid, text, color, width) in enumerate(self.announcement_text_ids):
             #     print(f"  Item {i}: '{text}' width={width}")
@@ -4680,7 +4739,16 @@ class IslamicBackground:
         """Update the scrolling announcement text - scroll all at once"""
         _t0 = datetime.now() if ENABLE_PERF_TRACE else None
         try:
-            if self.announcement_text_ids and len(self.announcement_text_ids) > 0:
+            # Handle hidden phase: wait for hide duration then unhide
+            if self.news_tape_hidden:
+                import time as _time
+                elapsed = _time.time() - self.news_tape_hide_start
+                if elapsed >= self.news_tape_hide_duration:
+                    self.news_tape_hidden = False
+                    self.announcement_x_pos = self.ribbon_width
+                    self.redraw_full_display()
+                # Skip scrolling while hidden
+            elif self.announcement_text_ids and len(self.announcement_text_ids) > 0:
                 try:
                     # Move all text objects left
                     self.announcement_x_pos -= 7  # Scroll speed (faster)
@@ -4697,8 +4765,16 @@ class IslamicBackground:
                     
                     # Check if all text has scrolled off screen
                     if self.announcement_x_pos < -self.announcement_total_width:
-                        # Reset to start (all announcements will loop from right)
-                        self.announcement_x_pos = self.ribbon_width
+                        if self.news_tape_hide_duration > 0:
+                            # Enter hide phase
+                            import time as _time
+                            self.news_tape_hidden = True
+                            self.news_tape_hide_start = _time.time()
+                            self.announcement_text_ids = []
+                            self.redraw_full_display()
+                        else:
+                            # No hide - loop immediately
+                            self.announcement_x_pos = self.ribbon_width
                         
                 except Exception as e:
                     self.announcement_text_ids = []
@@ -4718,7 +4794,7 @@ class IslamicBackground:
                 now_ts = datetime.now().timestamp()
                 if now_ts - last_ts >= 2:
                     self._perf_last_log['update_announcement'] = now_ts
-                    print(f"[PERF] update_announcement slow: {elapsed_ms:.1f}ms")
+                    self._log(f"[PERF] update_announcement slow: {elapsed_ms:.1f}ms")
     
     def update_yellow_ribbon(self):
         """Update the scrolling yellow ribbon text - scroll continuously"""
@@ -4762,7 +4838,7 @@ class IslamicBackground:
                 now_ts = datetime.now().timestamp()
                 if now_ts - last_ts >= 2:
                     self._perf_last_log['update_yellow_ribbon'] = now_ts
-                    print(f"[PERF] update_yellow_ribbon slow: {elapsed_ms:.1f}ms")
+                    self._log(f"[PERF] update_yellow_ribbon slow: {elapsed_ms:.1f}ms")
     
     def schedule_yellow_ribbon_update(self):
         """Schedule yellow ribbon scrolling updates"""
@@ -5232,9 +5308,7 @@ def main():
         app = IslamicBackground(root)
         root.mainloop()
     except Exception as e:
-        print(f"ERROR: {e}")
-        import traceback
-        traceback.print_exc()
+        pass
 
 
 if __name__ == '__main__':

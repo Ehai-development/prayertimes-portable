@@ -19,6 +19,10 @@
   "arabicnameduration": 5,
   "shrouqplus": 15,
   "prayernow": 3,
+  "showlogs": "no",
+  "showlogo": "no",
+  "hidenewstape": 30,
+  "countandprayeropacity": 50,
   "testing": {
     "enabled": false,
     "iqamah_testing": false,
