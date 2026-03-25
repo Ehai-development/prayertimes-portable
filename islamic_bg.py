@@ -16,6 +16,9 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from PIL import Image, ImageTk
+import urllib.request
+import urllib.parse
+import threading
 
 try:
     from hijri_converter import Hijri, Gregorian
@@ -189,6 +192,15 @@ class IslamicBackground:
         self.news_tape_hide_start = 0  # time.time() when hide began
         self.news_tape_hide_duration = 30  # seconds, loaded from config
         
+        # Weather data
+        self.show_weather = False
+        self.weather_data = None  # {current_temp, current_icon, forecast: [{day, high, low, icon}, ...]}
+        self.weather_lat = None
+        self.weather_lon = None
+        self.weather_last_fetch = 0
+        self.weather_fetch_interval = 1800  # 30 minutes
+        self._weather_fetching = False
+        
         # Tracking for prayer time changes (tomorrow vs today)
         self.changing_prayers = {}  # {prayer_name: {today: time, tomorrow: time}}
         self.announcement_scroll_complete = False
@@ -269,6 +281,8 @@ class IslamicBackground:
             self.root.after(self.lantern_pulse_tick_ms, self.schedule_lantern_pulse_animation)
             self.root.after(self.star_twinkle_tick_ms, self.schedule_star_twinkle_animation)
             self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
+            if self.show_weather:
+                self.root.after(500, self._start_weather_fetch)
         except Exception as e:
             self._log(f"[ERROR] Startup failed: {e}", flush=True)
             import traceback
@@ -455,10 +469,20 @@ class IslamicBackground:
 
         self._is_full_redraw = True
         try:
+            # Remember overlay state before wiping canvas
+            overlay_was_visible = self.iqamah_overlay_visible
+            overlay_mode = self.iqamah_overlay_mode
             self.canvas.delete('all')
             self.draw_islamic_background()
             self.draw_prayer_times()
             self.draw_test_mode_indicator()
+            # Re-show iqamah overlay if it was active (canvas.delete wiped it)
+            if overlay_was_visible:
+                self.iqamah_overlay_ids = []
+                if overlay_mode == 'post':
+                    self.show_post_iqamah_overlay()
+                else:
+                    self.show_iqamah_overlay()
         finally:
             self._is_full_redraw = False
 
@@ -522,20 +546,7 @@ class IslamicBackground:
 
     def update_lanterns_only(self):
         """Update only the lantern visuals without redrawing the entire display."""
-        width = self.canvas.winfo_width()
-        height = self.canvas.winfo_height()
-        if width <= 1 or height <= 1:
-            return
-
-        self.canvas.delete('animated_lanterns')
-
-        lantern_top_y = height / 2 - self.us(380)
-        lantern_size = self.us(120, 60)
-        lantern_spacing = width / 5
-
-        for i in [0, 3]:
-            x = lantern_spacing * (i + 1)
-            self.draw_ramadan_lantern(x, lantern_top_y, lantern_size, tags='animated_lanterns')
+        return  # Lanterns disabled
 
     def update_stars_only(self):
         """Update only star visuals with twinkling effect without redrawing entire display."""
@@ -868,13 +879,13 @@ class IslamicBackground:
 
         # (x_ratio, kind, size_ratio)
         motifs = [
-            (0.10, 'lantern', 0.090),
+            (0.10, 'crescent', 0.048),
             (0.24, 'crescent', 0.040),
             (0.36, 'star', 0.030),
             (0.50, 'crescent', 0.048),
             (0.64, 'star', 0.030),
             (0.76, 'crescent', 0.040),
-            (0.90, 'lantern', 0.090),
+            (0.90, 'crescent', 0.048),
         ]
 
         for x_ratio, kind, size_ratio in motifs:
@@ -1172,6 +1183,10 @@ class IslamicBackground:
 
         # Announcement ribbon background color
         self.announcement_bg_color = str(self.config.get('announcementbgcolor', '#0a1128')).strip()
+
+        # Show weather display - default No
+        showweather_val = str(self.config.get('showweather', 'no')).strip().lower()
+        self.show_weather = showweather_val in ('yes', 'true', '1')
         
         # Load location/address from address.txt if available
         address_path = config_dir / 'address.txt'
@@ -1381,8 +1396,8 @@ class IslamicBackground:
             return {
                 'card_fill': '#fdfaf2',
                 'card_outline': '#8b6b2e',
-                'card_current_fill': '#f4d58d',
-                'card_current_outline': '#b8860b',
+                'card_current_fill': '#ffe082',
+                'card_current_outline': '#d4a017',
                 'title_text': '#2c1f12',
                 'subtle_text': '#6b4f2a',
                 'athan_text': '#2c1f12',
@@ -3396,12 +3411,240 @@ class IslamicBackground:
             'Ramadan', 'Shawwal', 'Dhu Al-Qi\'dah', 'Dhu Al-Hijjah'
         ]
         return hijri_months[month - 1] if 1 <= month <= 12 else 'Unknown'
-    
+
+    # ── Weather Methods ──────────────────────────────────────────────
+
+    def _get_weather_icon(self, code):
+        """Map WMO weather code to a simple text icon."""
+        if code in (0, 1):
+            return '☀'
+        elif code in (2,):
+            return '⛅'
+        elif code in (3,):
+            return '☁'
+        elif code in (45, 48):
+            return '🌫'
+        elif code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
+            return '🌧'
+        elif code in (71, 73, 75, 77, 85, 86):
+            return '❄'
+        elif code in (95, 96, 99):
+            return '⛈'
+        return '☁'
+
+    def _get_weather_desc(self, code):
+        """Map WMO weather code to short description."""
+        descs = {
+            0: 'Clear', 1: 'Mostly Clear', 2: 'Partly Cloudy', 3: 'Overcast',
+            45: 'Fog', 48: 'Fog', 51: 'Light Drizzle', 53: 'Drizzle', 55: 'Heavy Drizzle',
+            61: 'Light Rain', 63: 'Rain', 65: 'Heavy Rain',
+            71: 'Light Snow', 73: 'Snow', 75: 'Heavy Snow', 77: 'Snow Grains',
+            80: 'Light Showers', 81: 'Showers', 82: 'Heavy Showers',
+            85: 'Snow Showers', 86: 'Heavy Snow Showers',
+            95: 'Thunderstorm', 96: 'Thunderstorm', 99: 'Thunderstorm'
+        }
+        return descs.get(code, 'Cloudy')
+
+    def _geocode_address(self):
+        """Geocode the address to lat/lon using Open-Meteo geocoding API."""
+        try:
+            address = self.config.get('location', '')
+            if not address:
+                return False
+            # Extract city name from address for geocoding
+            parts = [p.strip() for p in address.split(',')]
+            search_term = parts[1] if len(parts) > 1 else parts[0]
+            url = 'https://geocoding-api.open-meteo.com/v1/search?' + urllib.parse.urlencode({
+                'name': search_term, 'count': 1, 'language': 'en', 'format': 'json'
+            })
+            req = urllib.request.Request(url, headers={'User-Agent': 'PrayerTimeDisplay/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+            if 'results' in data and data['results']:
+                self.weather_lat = data['results'][0]['latitude']
+                self.weather_lon = data['results'][0]['longitude']
+                self._log(f"[WEATHER] Geocoded to lat={self.weather_lat}, lon={self.weather_lon}")
+                return True
+        except Exception as e:
+            self._log(f"[WEATHER] Geocode error: {e}")
+        return False
+
+    def _fetch_weather_data(self):
+        """Fetch current weather + 3-day forecast from Open-Meteo API."""
+        try:
+            if self.weather_lat is None or self.weather_lon is None:
+                if not self._geocode_address():
+                    return
+            url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode({
+                'latitude': self.weather_lat,
+                'longitude': self.weather_lon,
+                'current': 'temperature_2m,weather_code',
+                'daily': 'weather_code,temperature_2m_max,temperature_2m_min',
+                'temperature_unit': 'celsius',
+                'forecast_days': 4,
+                'timezone': 'auto'
+            })
+            req = urllib.request.Request(url, headers={'User-Agent': 'PrayerTimeDisplay/1.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = json.loads(resp.read().decode('utf-8'))
+
+            current = data.get('current', {})
+            daily = data.get('daily', {})
+
+            forecast = []
+            dates = daily.get('time', [])
+            highs = daily.get('temperature_2m_max', [])
+            lows = daily.get('temperature_2m_min', [])
+            codes = daily.get('weather_code', [])
+
+            # Skip today (index 0), take next 3 days
+            for i in range(1, min(4, len(dates))):
+                try:
+                    dt = datetime.strptime(dates[i], '%Y-%m-%d')
+                    day_name = dt.strftime('%a')
+                except:
+                    day_name = dates[i]
+                forecast.append({
+                    'day': day_name,
+                    'high': round(highs[i]) if i < len(highs) else '--',
+                    'low': round(lows[i]) if i < len(lows) else '--',
+                    'icon': self._get_weather_icon(codes[i] if i < len(codes) else 3)
+                })
+
+            self.weather_data = {
+                'current_temp': round(current.get('temperature_2m', 0)),
+                'current_icon': self._get_weather_icon(current.get('weather_code', 3)),
+                'current_desc': self._get_weather_desc(current.get('weather_code', 3)),
+                'forecast': forecast
+            }
+            self.weather_last_fetch = time.time()
+            self._log(f"[WEATHER] Updated: {self.weather_data['current_temp']}°C, {self.weather_data['current_desc']}")
+            # Trigger a redraw to show weather
+            try:
+                self.root.after(0, self.redraw_full_display)
+            except:
+                pass
+        except Exception as e:
+            self._log(f"[WEATHER] Fetch error: {e}")
+        finally:
+            self._weather_fetching = False
+
+    def _start_weather_fetch(self):
+        """Start a background weather fetch and schedule the next one."""
+        if self.show_weather and not self._weather_fetching:
+            now = time.time()
+            if now - self.weather_last_fetch >= self.weather_fetch_interval or self.weather_data is None:
+                self._weather_fetching = True
+                t = threading.Thread(target=self._fetch_weather_data, daemon=True)
+                t.start()
+        # Schedule next check
+        try:
+            self.root.after(60000, self._start_weather_fetch)  # Check every 60 seconds
+        except:
+            pass
+
+    def draw_weather(self, width, height):
+        """Draw current temperature and 3-day forecast in top-left corner."""
+        if not self.weather_data:
+            return
+
+        x_start = self.us(20, 10)
+        y_start = self.us(60, 30)
+        padding = self.us(12, 6)
+
+        # Panel dimensions (no visible box, just for layout)
+        panel_w = self.us(340, 180)
+        panel_h = self.us(168, 90)
+
+        # Current temperature - large
+        temp_text = f"{self.weather_data['current_temp']}°C"
+        icon_text = self.weather_data['current_icon']
+        desc_text = self.weather_data['current_desc']
+
+        curr_x = x_start + padding
+        curr_y = y_start + padding
+
+        # Icon
+        icon_size = self.fs(36, 18)
+        self.canvas.create_text(
+            curr_x, curr_y,
+            text=icon_text,
+            font=('Segoe UI Emoji', icon_size),
+            fill='white',
+            anchor='nw'
+        )
+
+        # Temperature
+        temp_size = self.fs(38, 19)
+        self.canvas.create_text(
+            curr_x + self.us(70, 36), curr_y,
+            text=temp_text,
+            font=('Arial', temp_size, 'bold'),
+            fill='#ffffff',
+            anchor='nw'
+        )
+
+        # Description
+        desc_size = self.fs(20, 10)
+        self.canvas.create_text(
+            curr_x + self.us(70, 36), curr_y + self.us(48, 24),
+            text=desc_text,
+            font=('Arial', desc_size),
+            fill='#a0c0e8',
+            anchor='nw'
+        )
+
+        # Separator line
+        sep_y = y_start + self.us(88, 46)
+        self.canvas.create_line(
+            x_start + padding, sep_y,
+            x_start + panel_w - padding, sep_y,
+            fill='#1a3a6a', width=1
+        )
+
+        # 3-day forecast
+        forecast = self.weather_data.get('forecast', [])
+        if forecast:
+            forecast_y = sep_y + self.us(10, 5)
+            col_width = (panel_w - 2 * padding) / len(forecast)
+            forecast_font = self.fs(22, 11)
+            icon_font = self.fs(26, 13)
+
+            for i, day in enumerate(forecast):
+                cx = x_start + padding + col_width * i + col_width / 2
+
+                # Day name
+                self.canvas.create_text(
+                    cx, forecast_y,
+                    text=day['day'],
+                    font=('Arial', forecast_font, 'bold'),
+                    fill='#c0d0e8',
+                    anchor='n'
+                )
+
+                # Icon
+                self.canvas.create_text(
+                    cx, forecast_y + self.us(28, 14),
+                    text=day['icon'],
+                    font=('Segoe UI Emoji', icon_font),
+                    fill='white',
+                    anchor='n'
+                )
+
+                # High/Low
+                self.canvas.create_text(
+                    cx, forecast_y + self.us(60, 30),
+                    text=f"{day['high']}° / {day['low']}°",
+                    font=('Arial', self.fs(18, 9), 'bold'),
+                    fill='#8aadcc',
+                    anchor='n'
+                )
+
     def draw_quran_verse(self, width, height):
         """Draw Quranic verse above prayer times with translation"""
         palette = self.get_theme_palette()
         # Arabic verse: "Verily, as-Salat (the prayer) is enjoined on the believers at fixed hours" (An-Nisa 4:103)
-        verse = "إِنَّ الصَّلَاةَ كَانَتْ عَلَى الْمُؤْمِنِينَ كِتَابًا مَوْقُوتًا"
+        verse = "﴾ إِنَّ الصَّلَاةَ كَانَتْ عَلَى الْمُؤْمِنِينَ كِتَابًا مَوْقُوتًا ﴿"
         translation = "Prayer has been decreed upon the believers at specific times."
         
         # Ayah at top, translation below, masjid name drawn in draw_header
@@ -3475,6 +3718,10 @@ class IslamicBackground:
 
         # Draw Quranic verse above prayer times
         self.draw_quran_verse(width, height)
+
+        # Draw weather in top-left corner
+        if self.show_weather and self.weather_data:
+            self.draw_weather(width, height)
         
         # Define prayers to display
         prayers = [
@@ -4733,6 +4980,13 @@ class IslamicBackground:
         if self.announcement_text_ids:
             last_item = self.announcement_text_ids[-1]
             self.announcement_total_width = self.announcement_x_positions[-1] + last_item[3] + 80
+
+        # Immediately position text at current scroll offset to avoid flicker on redraw
+        if self.announcement_x_pos != 0:
+            for i, (text_id, text, color, w) in enumerate(self.announcement_text_ids):
+                if i < len(self.announcement_x_positions):
+                    x_offset = self.announcement_x_pos + self.announcement_x_positions[i]
+                    self.canvas.coords(text_id, int(self.ribbon_x + x_offset), int(self.ribbon_y + self.ribbon_height / 2))
     
     def schedule_announcement_update(self):
         """Schedule announcement updates"""
