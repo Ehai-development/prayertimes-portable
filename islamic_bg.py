@@ -4893,6 +4893,13 @@ class IslamicBackground:
             # Keep existing scroll offset so redraws don't visibly restart the ticker.
             if not hasattr(self, 'yellow_ribbon_x_pos'):
                 self.yellow_ribbon_x_pos = 0
+
+            # Immediately position text at current scroll offset to avoid flicker on redraw
+            if self.yellow_ribbon_x_pos != 0:
+                for i, (text_id, text, color, w) in enumerate(self.yellow_ribbon_text_ids):
+                    if i < len(self.yellow_ribbon_x_positions):
+                        x_offset = self.yellow_ribbon_x_pos + self.yellow_ribbon_x_positions[i]
+                        self.canvas.coords(text_id, int(self.yellow_ribbon_x + x_offset), int(self.yellow_ribbon_y + self.yellow_ribbon_height / 2))
         # Note: If no changes, the yellow ribbon won't be drawn at all
     
     def draw_announcement_ribbon(self, x, y, width, height):
