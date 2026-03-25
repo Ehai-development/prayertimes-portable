@@ -223,6 +223,8 @@ class IslamicBackground:
         self.yellow_ribbon_y = 0  # Yellow ribbon top position
         self.yellow_ribbon_width = 0  # Yellow ribbon width
         self.yellow_ribbon_height = 0  # Yellow ribbon height
+        self.yellow_ribbon_hidden = False  # Hide/show cycle state
+        self.yellow_ribbon_hide_start = 0  # time.time() when hide began
         self.announcement_tick_ms = 100
         self.yellow_ribbon_tick_ms = 100
         self.salah_names_show_arabic = False
@@ -2441,9 +2443,9 @@ class IslamicBackground:
                         }
 
                     return {
-                        'prefix_text': localized_phrase('', 'اقامة '),
+                        'prefix_text': localized_phrase('', 'اقامة  '),
                         'name_text': localized_prayer_name(current_prayer),
-                        'in_text': localized_phrase(' IQAMAH IN ', ' خلال '),
+                        'in_text': localized_phrase(' IQAMAH IN ', '  خلال '),
                         'countdown_text': self.get_countdown(current_iqamah),
                         'rtl': rtl_mode
                     }
@@ -3414,111 +3416,78 @@ class IslamicBackground:
 
     # ── Weather Methods ──────────────────────────────────────────────
 
-    def _get_weather_icon(self, code):
-        """Map WMO weather code to a simple text icon."""
-        if code in (0, 1):
-            return '☀'
-        elif code in (2,):
-            return '⛅'
-        elif code in (3,):
-            return '☁'
-        elif code in (45, 48):
-            return '🌫'
-        elif code in (51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82):
-            return '🌧'
-        elif code in (71, 73, 75, 77, 85, 86):
-            return '❄'
-        elif code in (95, 96, 99):
+    def _get_weather_icon_from_desc(self, desc):
+        """Map weather description text to a simple text icon."""
+        desc_lower = (desc or '').lower()
+        if 'thunder' in desc_lower:
             return '⛈'
+        elif 'snow' in desc_lower or 'blizzard' in desc_lower or 'sleet' in desc_lower:
+            return '❄'
+        elif 'rain' in desc_lower or 'drizzle' in desc_lower or 'shower' in desc_lower:
+            return '🌧'
+        elif 'fog' in desc_lower or 'mist' in desc_lower:
+            return '🌫'
+        elif 'cloud' in desc_lower or 'overcast' in desc_lower:
+            return '☁'
+        elif 'partly' in desc_lower:
+            return '⛅'
+        elif 'sun' in desc_lower or 'clear' in desc_lower:
+            return '☀'
         return '☁'
 
-    def _get_weather_desc(self, code):
-        """Map WMO weather code to short description."""
-        descs = {
-            0: 'Clear', 1: 'Mostly Clear', 2: 'Partly Cloudy', 3: 'Overcast',
-            45: 'Fog', 48: 'Fog', 51: 'Light Drizzle', 53: 'Drizzle', 55: 'Heavy Drizzle',
-            61: 'Light Rain', 63: 'Rain', 65: 'Heavy Rain',
-            71: 'Light Snow', 73: 'Snow', 75: 'Heavy Snow', 77: 'Snow Grains',
-            80: 'Light Showers', 81: 'Showers', 82: 'Heavy Showers',
-            85: 'Snow Showers', 86: 'Heavy Snow Showers',
-            95: 'Thunderstorm', 96: 'Thunderstorm', 99: 'Thunderstorm'
-        }
-        return descs.get(code, 'Cloudy')
-
-    def _geocode_address(self):
-        """Geocode the address to lat/lon using Open-Meteo geocoding API."""
+    def _fetch_weather_data(self):
+        """Fetch current weather + 2-day forecast from wttr.in API."""
         try:
             address = self.config.get('location', '')
             if not address:
-                return False
-            # Extract city name from address for geocoding
+                return
+            # Extract city + region for wttr.in query
             parts = [p.strip() for p in address.split(',')]
-            search_term = parts[1] if len(parts) > 1 else parts[0]
-            url = 'https://geocoding-api.open-meteo.com/v1/search?' + urllib.parse.urlencode({
-                'name': search_term, 'count': 1, 'language': 'en', 'format': 'json'
-            })
-            req = urllib.request.Request(url, headers={'User-Agent': 'PrayerTimeDisplay/1.0'})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
-            if 'results' in data and data['results']:
-                self.weather_lat = data['results'][0]['latitude']
-                self.weather_lon = data['results'][0]['longitude']
-                self._log(f"[WEATHER] Geocoded to lat={self.weather_lat}, lon={self.weather_lon}")
-                return True
-        except Exception as e:
-            self._log(f"[WEATHER] Geocode error: {e}")
-        return False
+            if len(parts) >= 3:
+                query = f"{parts[1]},{parts[2]}".strip()
+            elif len(parts) >= 2:
+                query = parts[1].strip()
+            else:
+                query = parts[0].strip()
 
-    def _fetch_weather_data(self):
-        """Fetch current weather + 3-day forecast from Open-Meteo API."""
-        try:
-            if self.weather_lat is None or self.weather_lon is None:
-                if not self._geocode_address():
-                    return
-            url = 'https://api.open-meteo.com/v1/forecast?' + urllib.parse.urlencode({
-                'latitude': self.weather_lat,
-                'longitude': self.weather_lon,
-                'current': 'temperature_2m,weather_code',
-                'daily': 'weather_code,temperature_2m_max,temperature_2m_min',
-                'temperature_unit': 'celsius',
-                'forecast_days': 4,
-                'timezone': 'auto'
-            })
+            url = f'https://wttr.in/{urllib.parse.quote(query)}?format=j1'
             req = urllib.request.Request(url, headers={'User-Agent': 'PrayerTimeDisplay/1.0'})
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            with urllib.request.urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
 
-            current = data.get('current', {})
-            daily = data.get('daily', {})
+            cc = data.get('current_condition', [{}])[0]
+            current_temp = int(cc.get('temp_C', 0))
+            current_desc = cc.get('weatherDesc', [{}])[0].get('value', 'Cloudy')
+            current_icon = self._get_weather_icon_from_desc(current_desc)
 
             forecast = []
-            dates = daily.get('time', [])
-            highs = daily.get('temperature_2m_max', [])
-            lows = daily.get('temperature_2m_min', [])
-            codes = daily.get('weather_code', [])
-
-            # Skip today (index 0), take next 3 days
-            for i in range(1, min(4, len(dates))):
+            weather_days = data.get('weather', [])
+            # Skip today (index 0), take next 2 days
+            for i in range(1, min(3, len(weather_days))):
+                day_data = weather_days[i]
                 try:
-                    dt = datetime.strptime(dates[i], '%Y-%m-%d')
+                    dt = datetime.strptime(day_data['date'], '%Y-%m-%d')
                     day_name = dt.strftime('%a')
                 except:
-                    day_name = dates[i]
+                    day_name = day_data.get('date', '?')
+                high = int(day_data.get('maxtempC', 0))
+                low = int(day_data.get('mintempC', 0))
+                day_desc = day_data.get('hourly', [{}])[4].get('weatherDesc', [{}])[0].get('value', 'Cloudy') if len(day_data.get('hourly', [])) > 4 else 'Cloudy'
                 forecast.append({
                     'day': day_name,
-                    'high': round(highs[i]) if i < len(highs) else '--',
-                    'low': round(lows[i]) if i < len(lows) else '--',
-                    'icon': self._get_weather_icon(codes[i] if i < len(codes) else 3)
+                    'high': high,
+                    'low': low,
+                    'icon': self._get_weather_icon_from_desc(day_desc)
                 })
 
             self.weather_data = {
-                'current_temp': round(current.get('temperature_2m', 0)),
-                'current_icon': self._get_weather_icon(current.get('weather_code', 3)),
-                'current_desc': self._get_weather_desc(current.get('weather_code', 3)),
+                'current_temp': current_temp,
+                'current_icon': current_icon,
+                'current_desc': current_desc,
                 'forecast': forecast
             }
             self.weather_last_fetch = time.time()
-            self._log(f"[WEATHER] Updated: {self.weather_data['current_temp']}°C, {self.weather_data['current_desc']}")
+            self._log(f"[WEATHER] Updated: {current_temp}°C, {current_desc}")
             # Trigger a redraw to show weather
             try:
                 self.root.after(0, self.redraw_full_display)
@@ -3526,6 +3495,13 @@ class IslamicBackground:
                 pass
         except Exception as e:
             self._log(f"[WEATHER] Fetch error: {e}")
+            # Clear weather data so display disappears when offline
+            if self.weather_data is not None:
+                self.weather_data = None
+                try:
+                    self.root.after(0, self.redraw_full_display)
+                except:
+                    pass
         finally:
             self._weather_fetching = False
 
@@ -3584,16 +3560,6 @@ class IslamicBackground:
             anchor='nw'
         )
 
-        # Description
-        desc_size = self.fs(20, 10)
-        self.canvas.create_text(
-            curr_x + self.us(70, 36), curr_y + self.us(48, 24),
-            text=desc_text,
-            font=('Arial', desc_size),
-            fill='#a0c0e8',
-            anchor='nw'
-        )
-
         # Separator line
         sep_y = y_start + self.us(88, 46)
         self.canvas.create_line(
@@ -3602,13 +3568,13 @@ class IslamicBackground:
             fill='#1a3a6a', width=1
         )
 
-        # 3-day forecast
+        # 2-day forecast
         forecast = self.weather_data.get('forecast', [])
         if forecast:
-            forecast_y = sep_y + self.us(10, 5)
+            forecast_y = sep_y + self.us(14, 7)
             col_width = (panel_w - 2 * padding) / len(forecast)
-            forecast_font = self.fs(22, 11)
-            icon_font = self.fs(26, 13)
+            forecast_font = self.fs(30, 15)
+            icon_font = self.fs(28, 14)
 
             for i, day in enumerate(forecast):
                 cx = x_start + padding + col_width * i + col_width / 2
@@ -3624,7 +3590,7 @@ class IslamicBackground:
 
                 # Icon
                 self.canvas.create_text(
-                    cx, forecast_y + self.us(28, 14),
+                    cx, forecast_y + self.us(32, 16),
                     text=day['icon'],
                     font=('Segoe UI Emoji', icon_font),
                     fill='white',
@@ -3633,9 +3599,9 @@ class IslamicBackground:
 
                 # High/Low
                 self.canvas.create_text(
-                    cx, forecast_y + self.us(60, 30),
+                    cx, forecast_y + self.us(72, 36),
                     text=f"{day['high']}° / {day['low']}°",
-                    font=('Arial', self.fs(18, 9), 'bold'),
+                    font=('Arial', self.fs(30, 15), 'bold'),
                     fill='#8aadcc',
                     anchor='n'
                 )
@@ -4774,6 +4740,9 @@ class IslamicBackground:
     
     def draw_upcoming_changes_ribbon(self, x, y, width, height):
         """Draw a yellow news ribbon for upcoming prayer time changes"""
+        # Skip drawing if yellow ribbon is in hidden phase
+        if self.yellow_ribbon_hidden:
+            return
         # Store ribbon position for animation updates
         self.yellow_ribbon_x = x
         self.yellow_ribbon_y = y
@@ -5064,7 +5033,16 @@ class IslamicBackground:
         """Update the scrolling yellow ribbon text - scroll continuously"""
         _t0 = datetime.now() if ENABLE_PERF_TRACE else None
         try:
-            if self.yellow_ribbon_text_ids and len(self.yellow_ribbon_text_ids) > 0:
+            # Handle hidden phase: wait for hide duration then unhide
+            if self.yellow_ribbon_hidden:
+                import time as _time
+                elapsed = _time.time() - self.yellow_ribbon_hide_start
+                if elapsed >= self.news_tape_hide_duration:
+                    self.yellow_ribbon_hidden = False
+                    self.yellow_ribbon_x_pos = self.yellow_ribbon_width
+                    self.redraw_full_display()
+                # Skip scrolling while hidden
+            elif self.yellow_ribbon_text_ids and len(self.yellow_ribbon_text_ids) > 0:
                 try:
                     # Move all text objects left
                     self.yellow_ribbon_x_pos -= 7  # Match announcement scroll speed
@@ -5081,8 +5059,16 @@ class IslamicBackground:
                     
                     # Check if all text has scrolled off screen
                     if self.yellow_ribbon_x_pos < -self.yellow_ribbon_total_width:
-                        # Reset to start (text will loop from right)
-                        self.yellow_ribbon_x_pos = self.yellow_ribbon_width
+                        if self.news_tape_hide_duration > 0:
+                            # Enter hide phase
+                            import time as _time
+                            self.yellow_ribbon_hidden = True
+                            self.yellow_ribbon_hide_start = _time.time()
+                            self.yellow_ribbon_text_ids = []
+                            self.redraw_full_display()
+                        else:
+                            # No hide - loop immediately
+                            self.yellow_ribbon_x_pos = self.yellow_ribbon_width
                         
                 except Exception as e:
                     self.yellow_ribbon_text_ids = []
