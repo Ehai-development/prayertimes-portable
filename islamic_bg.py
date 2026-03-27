@@ -2447,8 +2447,8 @@ class IslamicBackground:
                     if prayer_key == 'Duhr' and is_friday:
                         return {
                             'prefix_text': '',
-                            'name_text': localized_phrase('JUMMAH KHUTBAH', 'خطبة الجمعة'),
-                            'in_text': localized_phrase(' IN ', ' خلال '),
+                            'name_text': localized_phrase('Jummah khutbah', 'خطبة الجمعة'),
+                            'in_text': localized_phrase(' in ', ' خلال '),
                             'countdown_text': self.get_countdown(current_iqamah),
                             'rtl': rtl_mode
                         }
@@ -2456,7 +2456,7 @@ class IslamicBackground:
                     return {
                         'prefix_text': localized_phrase('', 'اقامة  '),
                         'name_text': localized_prayer_name(current_prayer),
-                        'in_text': localized_phrase(' IQAMAH IN ', '  خلال '),
+                        'in_text': localized_phrase(' iqamah in ', '  خلال '),
                         'countdown_text': self.get_countdown(current_iqamah),
                         'rtl': rtl_mode
                     }
@@ -2466,24 +2466,24 @@ class IslamicBackground:
             if is_friday and next_prayer_name == 'Jummah':
                 return {
                     'prefix_text': '',
-                    'name_text': localized_phrase('JUMMAH KHUTBAH', 'خطبة الجمعة'),
-                    'in_text': localized_phrase(' IN ', ' خلال '),
+                    'name_text': localized_phrase('Jummah khutbah', 'خطبة الجمعة'),
+                    'in_text': localized_phrase(' in ', ' خلال '),
                     'countdown_text': self.get_countdown(next_athan),
                     'rtl': rtl_mode
                 }
             return {
-                'prefix_text': localized_phrase('NEXT PRAYER: ', 'الصلاة القادمة \u200f:\u200f '),
+                'prefix_text': localized_phrase('Next prayer: ', 'الصلاة القادمة \u200f:\u200f '),
                 'name_text': localized_prayer_name(next_prayer_name),
-                'in_text': localized_phrase(' IN ', ' خلال '),
+                'in_text': localized_phrase(' in ', ' خلال '),
                 'countdown_text': self.get_countdown(next_athan),
                 'rtl': rtl_mode
             }
         except:
             show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
             return {
-                'prefix_text': 'الصلاة القادمة \u200f:\u200f ' if show_arabic else 'NEXT PRAYER: ',
+                'prefix_text': 'الصلاة القادمة \u200f:\u200f ' if show_arabic else 'Next prayer: ',
                 'name_text': '---',
-                'in_text': ' خلال ' if show_arabic else ' IN ',
+                'in_text': ' خلال ' if show_arabic else ' in ',
                 'countdown_text': '--:--:--',
                 'rtl': show_arabic
             }
@@ -2867,13 +2867,13 @@ class IslamicBackground:
             icon_y = notice_y + self.us(200, 112)
             change_notice_y = icon_y + self.us(230, 125)
             is_friday_khutbah = (self.current_prayer_name == 'Jummah' and self.get_current_date().weekday() == 4)
-            prayer_line_text = f"{self.current_prayer_name.upper()} IQAMAH IN"
+            prayer_line_text = f"{self.current_prayer_name.upper()} iqamah in"
             instruction_line_text = 'Please put your cell phone on silent mode'
             instruction_font_size = self.fs(68, 32)
             iqamah_change_notice = self.get_iqamah_change_notice_text()
 
             if is_friday_khutbah:
-                prayer_line_text = 'JUMMAH KHUTBAH IN'
+                prayer_line_text = 'Jummah khutbah in'
                 instruction_line_text = 'Talking is forbidden during Khutbahs'
                 instruction_font_size = self.fs(74, 34)
 
