@@ -1183,6 +1183,17 @@ class IslamicBackground:
         nearest = min(stipple_map.keys(), key=lambda k: abs(k - opacity_val))
         self.overlay_stipple = stipple_map[nearest]
 
+        # Prayer box opacity (100=solid, 75/50/25/12=semi-transparent)
+        try:
+            box_opacity_val = int(self.config.get('prayerboxopacity', 100))
+        except:
+            box_opacity_val = 100
+        if box_opacity_val >= 100:
+            self.prayer_box_stipple = ''
+        else:
+            box_nearest = min(stipple_map.keys(), key=lambda k: abs(k - box_opacity_val))
+            self.prayer_box_stipple = stipple_map[box_nearest]
+
         # Announcement ribbon background color
         self.announcement_bg_color = str(self.config.get('announcementbgcolor', '#0a1128')).strip()
 
@@ -4015,7 +4026,8 @@ class IslamicBackground:
             outline_w = 3
         
         # Draw rounded rectangle background
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w)
+        stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
+        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w, **stipple_arg)
 
         if theme_name == 'elegent':
             header_h = self.us(58, 28)
@@ -4237,7 +4249,8 @@ class IslamicBackground:
             fill_color = palette['card_fill']
             outline_color = palette['card_outline']
             outline_w = 3
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w)
+        stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
+        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w, **stipple_arg)
         
         # Rotate only the top prayer name (JUMMAH <-> العربية); keep KHUTBAH in English
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
@@ -4303,7 +4316,8 @@ class IslamicBackground:
             outline_w = 3
 
         # Draw rounded rectangle background
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w)
+        stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
+        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w, **stipple_arg)
         
         # Rotating Shrouq name (English/Arabic)
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))

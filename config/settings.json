@@ -25,6 +25,7 @@
   "countandprayeropacity": 50,
   "announcementbgcolor": "#0a1128",
   "showweather": "yes",
+  "prayerboxopacity": 60,
   "testing": {
     "enabled": false,
     "iqamah_testing": false,
