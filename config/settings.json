@@ -22,10 +22,10 @@
   "showlogs": "no",
   "showlogo": "no",
   "hidenewstape": 30,
-  "countandprayeropacity": 60,
+  "countandprayeropacity": 75,
   "announcementbgcolor": "#0a1128",
   "showweather": "yes",
-  "prayerboxopacity": 50,
+  "prayerboxopacity": 75,
   "testing": {
     "enabled": false,
     "iqamah_testing": false,

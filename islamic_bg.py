@@ -1388,7 +1388,7 @@ class IslamicBackground:
                 'card_fill': '#0f2d66',
                 'card_outline': '#4f75c0',
                 'card_current_fill': '#2a56ad',
-                'card_current_outline': '#c8dcff',
+                'card_current_outline': '#d4af37',
                 'title_text': '#f2f7ff',
                 'subtle_text': '#b7c8ee',
                 'athan_text': '#f8fbff',
@@ -1410,7 +1410,7 @@ class IslamicBackground:
                 'card_fill': '#fdfaf2',
                 'card_outline': '#8b6b2e',
                 'card_current_fill': '#ffe082',
-                'card_current_outline': '#d4a017',
+                'card_current_outline': '#d4af37',
                 'title_text': '#2c1f12',
                 'subtle_text': '#6b4f2a',
                 'athan_text': '#2c1f12',
@@ -1431,7 +1431,7 @@ class IslamicBackground:
             'card_fill': '#0f2d66',
             'card_outline': '#4f75c0',
             'card_current_fill': '#2a56ad',
-            'card_current_outline': '#c8dcff',
+            'card_current_outline': '#d4af37',
             'title_text': '#f2f7ff',
             'subtle_text': '#b7c8ee',
             'athan_text': '#f8fbff',
@@ -3975,6 +3975,7 @@ class IslamicBackground:
 
             row_fill = palette['card_current_fill'] if is_current else palette['card_fill']
             row_outline = palette['card_current_outline'] if is_current else ''
+            row_stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
             row_shape_id = self.canvas.create_rectangle(
                 table_x + self.us(14, 7),
                 y1,
@@ -3982,7 +3983,8 @@ class IslamicBackground:
                 y2,
                 fill=row_fill,
                 outline=row_outline,
-                width=self.us(2, 1)
+                width=self.us(2, 1),
+                **row_stipple_arg
             )
             self.prayer_box_shape_ids[key] = row_shape_id
             self.prayer_box_bounds[key] = (table_x + self.us(14, 7), y1, table_w - self.us(28, 14), row_h)
@@ -4293,12 +4295,12 @@ class IslamicBackground:
             color=palette['athan_text']
         )
         
-        # Draw "ALL YEAR LONG" in red
+        # Draw "ALL YEAR LONG" using the same color as iqamah text
         self.canvas.create_text(
             x + width/2, y + self.us(174, 84) + text_y_offset,
             text='ALL YEAR LONG',
             font=('Arial', self.fs(28, 14), 'bold'),
-            fill='#d32f2f'
+            fill=palette['iqamah_text']
         )
         
         return box_shape_id
@@ -4434,7 +4436,7 @@ class IslamicBackground:
             outline_id = self.canvas.create_text(
                 x + dx, current_time_y + dy,
                 text=current_time_text,
-                font=('Arial', self.fs(75, 36), 'bold'),
+                font=('Arial', self.fs(80, 39), 'bold'),
                 fill='black'
             )
             self.current_time_outline_ids.append(outline_id)
@@ -4442,7 +4444,7 @@ class IslamicBackground:
         self.current_time_text_id = self.canvas.create_text(
             x, current_time_y,
             text=current_time_text,
-            font=('Arial', self.fs(75, 36), 'bold'),
+            font=('Arial', self.fs(80, 39), 'bold'),
             fill='white'
         )
 
