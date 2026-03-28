@@ -15,7 +15,7 @@ import socket
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw
 import urllib.request
 import urllib.parse
 import threading
@@ -162,6 +162,9 @@ class IslamicBackground:
         self.background_photo_image = None
         self.background_image_size = (0, 0)
         self.background_image_path = None
+        self._alpha_image_refs = {}
+        self.prayer_box_fill_ids = {}
+        self.prayer_box_fill_styles = {}
         
         # Iqamah countdown overlay (appears within 2 minutes of Iqamah)
         self.iqamah_overlay_visible = False
@@ -475,6 +478,9 @@ class IslamicBackground:
             overlay_was_visible = self.iqamah_overlay_visible
             overlay_mode = self.iqamah_overlay_mode
             self.canvas.delete('all')
+            self._alpha_image_refs = {}
+            self.prayer_box_fill_ids = {}
+            self.prayer_box_fill_styles = {}
             self.draw_islamic_background()
             self.draw_prayer_times()
             self.draw_test_mode_indicator()
@@ -1182,6 +1188,7 @@ class IslamicBackground:
         # Snap to nearest valid stipple
         nearest = min(stipple_map.keys(), key=lambda k: abs(k - opacity_val))
         self.overlay_stipple = stipple_map[nearest]
+        self.overlay_opacity_percent = max(0, min(100, opacity_val))
 
         # Prayer box opacity (100=solid, 75/50/25/12=semi-transparent)
         try:
@@ -1193,6 +1200,7 @@ class IslamicBackground:
         else:
             box_nearest = min(stipple_map.keys(), key=lambda k: abs(k - box_opacity_val))
             self.prayer_box_stipple = stipple_map[box_nearest]
+        self.prayer_box_opacity_percent = max(0, min(100, box_opacity_val))
 
         # Announcement ribbon background color
         self.announcement_bg_color = str(self.config.get('announcementbgcolor', '#0a1128')).strip()
@@ -2453,11 +2461,14 @@ class IslamicBackground:
                             'rtl': rtl_mode
                         }
 
+                    iqamah_name_text = localized_prayer_name(current_prayer)
+                    iqamah_countdown_text = self.get_countdown(current_iqamah)
+
                     return {
-                        'prefix_text': localized_phrase('', 'اقامة  '),
-                        'name_text': localized_prayer_name(current_prayer),
-                        'in_text': localized_phrase(' iqamah in ', '  خلال '),
-                        'countdown_text': self.get_countdown(current_iqamah),
+                        'prefix_text': localized_phrase('', 'إقامة '),
+                        'name_text': iqamah_name_text,
+                        'in_text': localized_phrase(' iqamah in ', ' خلال '),
+                        'countdown_text': iqamah_countdown_text,
                         'rtl': rtl_mode
                     }
 
@@ -2627,23 +2638,34 @@ class IslamicBackground:
 
                     if self.next_prayer_line_x is not None and self.next_prayer_line_y is not None:
                         text_parts = (prefix_text, name_text, in_text, rtl_mode)
-                        if text_parts != self._next_prayer_last_text_parts:
+                        
+                        # For RTL Arabic, keep segments separate but enforce a visible gap.
+                        if rtl_mode:
                             prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
                             name_width = self.next_prayer_line_font.measure(name_text)
                             in_width = self.next_prayer_line_font.measure(in_text)
                             countdown_width = self.next_prayer_countdown_fixed_width
-                            self._next_prayer_last_text_parts = text_parts
-                            self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
-                            static_total_width = prefix_width + name_width + in_width + countdown_width
-                            unconstrained_static_width = max(260, static_total_width + (self.next_prayer_panel_padding_x * 2))
-                            if self.next_prayer_max_panel_width:
-                                self.next_prayer_static_width = min(unconstrained_static_width, self.next_prayer_max_panel_width)
-                            else:
-                                self.next_prayer_static_width = unconstrained_static_width
+                            rtl_gap = self.us(18, 9)
+                            total_width = prefix_width + name_width + in_width + countdown_width + (rtl_gap * 3)
                         else:
-                            prefix_width, name_width, in_width, countdown_width = self._next_prayer_last_widths
+                            # For LTR English, keep separate measurements as before
+                            if text_parts != self._next_prayer_last_text_parts:
+                                prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
+                                name_width = self.next_prayer_line_font.measure(name_text)
+                                in_width = self.next_prayer_line_font.measure(in_text)
+                                countdown_width = self.next_prayer_countdown_fixed_width
+                                self._next_prayer_last_text_parts = text_parts
+                                self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
+                                static_total_width = prefix_width + name_width + in_width + countdown_width
+                                unconstrained_static_width = max(260, static_total_width + (self.next_prayer_panel_padding_x * 2))
+                                if self.next_prayer_max_panel_width:
+                                    self.next_prayer_static_width = min(unconstrained_static_width, self.next_prayer_max_panel_width)
+                                else:
+                                    self.next_prayer_static_width = unconstrained_static_width
+                            else:
+                                prefix_width, name_width, in_width, countdown_width = self._next_prayer_last_widths
+                            total_width = prefix_width + name_width + in_width + countdown_width
 
-                        total_width = prefix_width + name_width + in_width + countdown_width
                         left_x = self.next_prayer_line_x - (total_width / 2)
                         right_x = self.next_prayer_line_x + (total_width / 2)
 
@@ -2672,19 +2694,21 @@ class IslamicBackground:
                             self.canvas.tag_lower(self.next_prayer_panel_id, self.next_prayer_prefix_text_id)
 
                         if rtl_mode:
-                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, anchor='e')
-                            self.canvas.itemconfig(self.next_prayer_name_text_id, anchor='e')
-                            self.canvas.itemconfig(self.next_prayer_in_text_id, anchor='e')
-                            self.canvas.itemconfig(self.countdown_text_id, anchor='e')
+                            rtl_gap = self.us(18, 9)
+                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, state='normal', anchor='e')
+                            self.canvas.itemconfig(self.next_prayer_name_text_id, state='normal', anchor='e')
+                            self.canvas.itemconfig(self.next_prayer_in_text_id, state='normal', anchor='e')
+                            self.canvas.itemconfig(self.countdown_text_id, state='normal', anchor='e')
                             self.canvas.coords(self.next_prayer_prefix_text_id, right_x, self.next_prayer_line_y)
-                            self.canvas.coords(self.next_prayer_name_text_id, right_x - prefix_width, self.next_prayer_line_y)
-                            self.canvas.coords(self.next_prayer_in_text_id, right_x - prefix_width - name_width, self.next_prayer_line_y)
-                            self.canvas.coords(self.countdown_text_id, right_x - prefix_width - name_width - in_width, self.next_prayer_line_y)
+                            self.canvas.coords(self.next_prayer_name_text_id, right_x - prefix_width - rtl_gap, self.next_prayer_line_y)
+                            self.canvas.coords(self.next_prayer_in_text_id, right_x - prefix_width - rtl_gap - name_width - rtl_gap, self.next_prayer_line_y)
+                            self.canvas.coords(self.countdown_text_id, right_x - prefix_width - rtl_gap - name_width - rtl_gap - in_width - rtl_gap, self.next_prayer_line_y)
                         else:
-                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, anchor='w')
-                            self.canvas.itemconfig(self.next_prayer_name_text_id, anchor='w')
-                            self.canvas.itemconfig(self.next_prayer_in_text_id, anchor='w')
-                            self.canvas.itemconfig(self.countdown_text_id, anchor='w')
+                            # For English LTR: use separate positioned text elements
+                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, state='normal', anchor='w')
+                            self.canvas.itemconfig(self.next_prayer_name_text_id, state='normal', anchor='w')
+                            self.canvas.itemconfig(self.next_prayer_in_text_id, state='normal', anchor='w')
+                            self.canvas.itemconfig(self.countdown_text_id, state='normal', anchor='w')
                             self.canvas.coords(self.next_prayer_prefix_text_id, left_x, self.next_prayer_line_y)
                             self.canvas.coords(self.next_prayer_name_text_id, left_x + prefix_width, self.next_prayer_line_y)
                             self.canvas.coords(self.next_prayer_in_text_id, left_x + prefix_width + name_width, self.next_prayer_line_y)
@@ -2840,21 +2864,38 @@ class IslamicBackground:
             overlay_bg = self.draw_overlay_background(width, height, tags='iqamah_overlay')
             self.iqamah_overlay_ids.append(overlay_bg)
 
-            readability_veil = self.canvas.create_rectangle(
+            readability_veil = self.draw_alpha_fill(
                 0, 0, width, height,
-                fill='white',
-                stipple=self.overlay_stipple,
-                outline='',
+                fill_color='white',
+                opacity_percent=self.overlay_opacity_percent,
+                radius=0,
                 tags='iqamah_overlay'
             )
             self.iqamah_overlay_ids.append(readability_veil)
 
-            # Live current time (top-left)
+            # Live current time (bottom-left, white rounded background)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
+            time_font = ('Arial', self.fs(50, 24), 'bold')
+            time_pad_x = self.us(20, 10)
+            time_pad_y = self.us(10, 5)
+            time_radius = self.us(20, 10)
+            import tkinter.font as _tf
+            _tw = _tf.Font(font=time_font).measure(current_time_text)
+            _th = _tf.Font(font=time_font).metrics('linespace')
+            time_bg_x = self.us(20, 10)
+            time_bg_y = height - self.us(20, 10) - _th - time_pad_y * 2
+            time_bg_id = self.draw_rounded_rectangle(
+                time_bg_x, time_bg_y,
+                _tw + time_pad_x * 2, _th + time_pad_y * 2,
+                time_radius,
+                fill='white', outline='#cccccc', outline_width=1,
+                tags=('iqamah_overlay', 'iqamah_overlay_time_bg')
+            )
+            self.iqamah_overlay_ids.append(time_bg_id)
             top_left_time = self.canvas.create_text(
-                self.us(36, 18), self.us(4, 2),
+                time_bg_x + time_pad_x, time_bg_y + time_pad_y,
                 text=current_time_text,
-                font=('Arial', self.fs(50, 24), 'bold'),
+                font=time_font,
                 fill='#1a3a5f',
                 anchor='nw',
                 tags=('iqamah_overlay', 'iqamah_overlay_current_time')
@@ -2877,23 +2918,27 @@ class IslamicBackground:
                 instruction_line_text = 'Talking is forbidden during Khutbahs'
                 instruction_font_size = self.fs(74, 34)
 
-            # Prayer line: PRAYERNAME IQAMAH IN (green)
-            prayer_text = self.canvas.create_text(
+            # Prayer line: PRAYERNAME IQAMAH IN (green with white outline)
+            prayer_text = self.draw_outlined_text(
                 width / 2, line1_y,
                 text=prayer_line_text,
                 font=('Arial', self.fs(78, 34), 'bold'),
                 fill='#2E7D32',
+                outline='white',
+                outline_px=self.us(3, 2),
                 tags='iqamah_overlay'
             )
             self.iqamah_overlay_ids.append(prayer_text)
 
             # Countdown time (will be updated every second)
             countdown = self.get_iqamah_countdown()
-            countdown_text = self.canvas.create_text(
+            countdown_text = self.draw_outlined_text(
                 width / 2, countdown_y,
                 text=countdown,
                 font=('Arial', self.fs(170, 72), 'bold'),
                 fill='#d32f2f',
+                outline='white',
+                outline_px=self.us(4, 2),
                 tags=('iqamah_overlay', 'iqamah_countdown_time')
             )
             self.iqamah_overlay_ids.append(countdown_text)
@@ -2964,21 +3009,38 @@ class IslamicBackground:
             self.iqamah_overlay_ids.append(overlay_bg)
 
             # Add a soft white veil so text remains readable while background stays visible.
-            readability_veil = self.canvas.create_rectangle(
+            readability_veil = self.draw_alpha_fill(
                 0, 0, width, height,
-                fill='white',
-                stipple=self.overlay_stipple,
-                outline='',
+                fill_color='white',
+                opacity_percent=self.overlay_opacity_percent,
+                radius=0,
                 tags='iqamah_overlay'
             )
             self.iqamah_overlay_ids.append(readability_veil)
 
-            # Live current time (top-left)
+            # Live current time (bottom-left, white rounded background)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
+            time_font = ('Arial', self.fs(50, 24), 'bold')
+            time_pad_x = self.us(20, 10)
+            time_pad_y = self.us(10, 5)
+            time_radius = self.us(20, 10)
+            import tkinter.font as _tf
+            _tw = _tf.Font(font=time_font).measure(current_time_text)
+            _th = _tf.Font(font=time_font).metrics('linespace')
+            time_bg_x = self.us(20, 10)
+            time_bg_y = height - self.us(20, 10) - _th - time_pad_y * 2
+            time_bg_id = self.draw_rounded_rectangle(
+                time_bg_x, time_bg_y,
+                _tw + time_pad_x * 2, _th + time_pad_y * 2,
+                time_radius,
+                fill='white', outline='#cccccc', outline_width=1,
+                tags=('iqamah_overlay', 'iqamah_overlay_time_bg')
+            )
+            self.iqamah_overlay_ids.append(time_bg_id)
             top_left_time = self.canvas.create_text(
-                self.us(36, 18), self.us(4, 2),
+                time_bg_x + time_pad_x, time_bg_y + time_pad_y,
                 text=current_time_text,
-                font=('Arial', self.fs(50, 24), 'bold'),
+                font=time_font,
                 fill='#1a3a5f',
                 anchor='nw',
                 tags=('iqamah_overlay', 'iqamah_overlay_current_time')
@@ -2990,11 +3052,13 @@ class IslamicBackground:
             icon_y = notice_y + self.us(220, 125)
             prayer_now_y = icon_y + self.us(230, 130)
 
-            ayah_text = self.canvas.create_text(
+            ayah_text = self.draw_outlined_text(
                 width / 2, ayah_y,
-                text='إِنَّ الصَّلَاةَ كَانَتْ عَلَى الْمُؤْمِنِينَ كِتَابًا مَوْقُوتًا',
+                text='﴾ إِنَّ الصَّلَاةَ كَانَتْ عَلَى الْمُؤْمِنِينَ كِتَابًا مَوْقُوتًا ﴿',
                 font=('Arial', self.fs(74, 36), 'bold'),
                 fill='#2E7D32',
+                outline='white',
+                outline_px=self.us(3, 2),
                 tags='iqamah_overlay'
             )
             self.iqamah_overlay_ids.append(ayah_text)
@@ -3011,11 +3075,13 @@ class IslamicBackground:
             icon_ids = self.draw_no_phone_icon(width / 2, icon_y, size=self.us(240, 130), tags='iqamah_overlay')
             self.iqamah_overlay_ids.extend(icon_ids)
 
-            prayer_now_text = self.canvas.create_text(
+            prayer_now_text = self.draw_outlined_text(
                 width / 2, prayer_now_y,
                 text='Prayer is now',
                 font=('Arial', self.fs(92, 42), 'bold'),
                 fill='#d32f2f',
+                outline='white',
+                outline_px=self.us(3, 2),
                 tags='iqamah_overlay'
             )
             self.iqamah_overlay_ids.append(prayer_now_text)
@@ -3152,16 +3218,20 @@ class IslamicBackground:
                     self.hide_iqamah_overlay()
                 return
 
-            # Find and update the countdown text element
+            # Find and update the countdown text elements (includes outline copies)
             items = self.canvas.find_withtag('iqamah_countdown_time')
-            if items:
-                self.canvas.itemconfig(items[0], text=countdown)
+            for item in items:
+                self.canvas.itemconfig(item, text=countdown)
 
-            # Update top-left current time on countdown overlay
+            # Update current time on overlay (bottom-left)
             time_items = self.canvas.find_withtag('iqamah_overlay_current_time')
             if time_items:
-                self.canvas.itemconfig(time_items[0], text=self.get_current_time().strftime('%I:%M:%S %p'))
-                self.canvas.coords(time_items[0], self.us(36, 18), self.us(4, 2))
+                new_time = self.get_current_time().strftime('%I:%M:%S %p')
+                self.canvas.itemconfig(time_items[0], text=new_time)
+            bg_items = self.canvas.find_withtag('iqamah_overlay_time_bg')
+            if bg_items:
+                self.canvas.tag_raise('iqamah_overlay_time_bg')
+                self.canvas.tag_raise('iqamah_overlay_current_time')
         except Exception as e:
             self._log(f"ERROR in update_iqamah_overlay_countdown: {e}")
 
@@ -3975,19 +4045,34 @@ class IslamicBackground:
 
             row_fill = palette['card_current_fill'] if is_current else palette['card_fill']
             row_outline = palette['card_current_outline'] if is_current else ''
-            row_stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
-            row_shape_id = self.canvas.create_rectangle(
-                table_x + self.us(14, 7),
-                y1,
-                table_x + table_w - self.us(14, 7),
-                y2,
-                fill=row_fill,
-                outline=row_outline,
-                width=self.us(2, 1),
-                **row_stipple_arg
+            row_x = table_x + self.us(14, 7)
+            row_w = table_w - self.us(28, 14)
+            row_fill_id = self.draw_alpha_fill(
+                row_x, y1, row_w, row_h,
+                fill_color=row_fill,
+                opacity_percent=self.prayer_box_opacity_percent,
+                radius=0
             )
+            row_shape_id = self.canvas.create_rectangle(
+                row_x,
+                y1,
+                row_x + row_w,
+                y2,
+                fill='',
+                outline=row_outline,
+                width=self.us(2, 1)
+            )
+            self.canvas.tag_lower(row_fill_id, row_shape_id)
+            self.prayer_box_fill_ids[key] = row_fill_id
+            self.prayer_box_fill_styles[key] = {
+                'x': row_x,
+                'y': y1,
+                'width': row_w,
+                'height': row_h,
+                'radius': 0
+            }
             self.prayer_box_shape_ids[key] = row_shape_id
-            self.prayer_box_bounds[key] = (table_x + self.us(14, 7), y1, table_w - self.us(28, 14), row_h)
+            self.prayer_box_bounds[key] = (row_x, y1, row_w, row_h)
 
             athan_time = prayers_data.get(f'{key}Athan', '--')
             iqamah_time = prayers_data.get(f'{key}Iqama', '--')
@@ -4027,9 +4112,25 @@ class IslamicBackground:
             outline_color = palette['card_outline']
             outline_w = 3
         
-        # Draw rounded rectangle background
-        stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w, **stipple_arg)
+        # Draw smooth alpha background then crisp outline
+        corner_radius = self.us(40, 22)
+        fill_id = self.draw_alpha_fill(
+            x, y, width, height,
+            fill_color=fill_color,
+            opacity_percent=self.prayer_box_opacity_percent,
+            radius=corner_radius
+        )
+        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, corner_radius, fill='', outline=outline_color, outline_width=outline_w)
+        self.canvas.tag_lower(fill_id, box_shape_id)
+        if prayer_key:
+            self.prayer_box_fill_ids[prayer_key] = fill_id
+            self.prayer_box_fill_styles[prayer_key] = {
+                'x': x,
+                'y': y,
+                'width': width,
+                'height': height,
+                'radius': corner_radius
+            }
 
         if theme_name == 'elegent':
             header_h = self.us(58, 28)
@@ -4201,13 +4302,17 @@ class IslamicBackground:
             try:
                 if prayer_key == blinking_prayer:
                     if blink_visible:
-                        self.canvas.itemconfig(shape_id, fill=palette['card_current_fill'], outline=palette['card_current_outline'], width=4)
+                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'])
+                        self.canvas.itemconfig(shape_id, fill='', outline=palette['card_current_outline'], width=4)
                     else:
-                        self.canvas.itemconfig(shape_id, fill=palette['card_fill'], outline=palette['card_outline'], width=3)
+                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'])
+                        self.canvas.itemconfig(shape_id, fill='', outline=palette['card_outline'], width=3)
                 elif prayer_key == current_prayer:
-                    self.canvas.itemconfig(shape_id, fill=palette['card_current_fill'], outline=palette['card_current_outline'], width=4)
+                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'])
+                    self.canvas.itemconfig(shape_id, fill='', outline=palette['card_current_outline'], width=4)
                 else:
-                    self.canvas.itemconfig(shape_id, fill=palette['card_fill'], outline=palette['card_outline'], width=3)
+                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'])
+                    self.canvas.itemconfig(shape_id, fill='', outline=palette['card_outline'], width=3)
             except:
                 pass
     
@@ -4237,6 +4342,62 @@ class IslamicBackground:
             width=outline_width,
             **kwargs
         )
+
+    def _color_to_rgb(self, color):
+        """Convert Tk color string to RGB tuple."""
+        try:
+            r16, g16, b16 = self.root.winfo_rgb(color)
+            return (r16 // 256, g16 // 256, b16 // 256)
+        except:
+            return (255, 255, 255)
+
+    def draw_alpha_fill(self, x, y, width, height, fill_color, opacity_percent, radius=0, tags=()):
+        """Draw smooth alpha fill using an RGBA image (avoids stipple mesh)."""
+        w = max(1, int(round(width)))
+        h = max(1, int(round(height)))
+        alpha = max(0, min(255, int(round((max(0, min(100, opacity_percent)) / 100.0) * 255))))
+        r, g, b = self._color_to_rgb(fill_color)
+
+        img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        rgba = (r, g, b, alpha)
+
+        if radius > 0:
+            draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=max(1, int(round(radius))), fill=rgba)
+        else:
+            draw.rectangle((0, 0, w - 1, h - 1), fill=rgba)
+
+        photo = ImageTk.PhotoImage(img)
+        image_id = self.canvas.create_image(int(round(x)), int(round(y)), image=photo, anchor='nw', tags=tags)
+        self._alpha_image_refs[image_id] = photo
+        return image_id
+
+    def update_prayer_box_alpha_fill(self, prayer_key, fill_color):
+        """Recreate alpha fill image for a prayer box when highlight state changes."""
+        style = self.prayer_box_fill_styles.get(prayer_key)
+        if not style:
+            return
+
+        old_id = self.prayer_box_fill_ids.get(prayer_key)
+        if old_id:
+            try:
+                self.canvas.delete(old_id)
+            except:
+                pass
+            self._alpha_image_refs.pop(old_id, None)
+
+        new_id = self.draw_alpha_fill(
+            style['x'], style['y'], style['width'], style['height'],
+            fill_color, self.prayer_box_opacity_percent, radius=style.get('radius', 0)
+        )
+        self.prayer_box_fill_ids[prayer_key] = new_id
+
+        outline_id = self.prayer_box_shape_ids.get(prayer_key)
+        if outline_id:
+            try:
+                self.canvas.tag_lower(new_id, outline_id)
+            except:
+                pass
     
     def draw_khutbah_box(self, x, y, width, height, is_current=False):
         """Draw Khutbah (Friday Sermon) box"""
@@ -4251,8 +4412,23 @@ class IslamicBackground:
             fill_color = palette['card_fill']
             outline_color = palette['card_outline']
             outline_w = 3
-        stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w, **stipple_arg)
+        corner_radius = self.us(40, 22)
+        fill_id = self.draw_alpha_fill(
+            x, y, width, height,
+            fill_color=fill_color,
+            opacity_percent=self.prayer_box_opacity_percent,
+            radius=corner_radius
+        )
+        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, corner_radius, fill='', outline=outline_color, outline_width=outline_w)
+        self.canvas.tag_lower(fill_id, box_shape_id)
+        self.prayer_box_fill_ids['Jummah'] = fill_id
+        self.prayer_box_fill_styles['Jummah'] = {
+            'x': x,
+            'y': y,
+            'width': width,
+            'height': height,
+            'radius': corner_radius
+        }
         
         # Rotate only the top prayer name (JUMMAH <-> العربية); keep KHUTBAH in English
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
@@ -4317,9 +4493,24 @@ class IslamicBackground:
             outline_color = palette['card_outline']
             outline_w = 3
 
-        # Draw rounded rectangle background
-        stipple_arg = {'stipple': self.prayer_box_stipple} if getattr(self, 'prayer_box_stipple', '') else {}
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, self.us(40, 22), fill=fill_color, outline=outline_color, outline_width=outline_w, **stipple_arg)
+        # Draw smooth alpha background then crisp outline
+        corner_radius = self.us(40, 22)
+        fill_id = self.draw_alpha_fill(
+            x, y, width, height,
+            fill_color=fill_color,
+            opacity_percent=self.prayer_box_opacity_percent,
+            radius=corner_radius
+        )
+        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, corner_radius, fill='', outline=outline_color, outline_width=outline_w)
+        self.canvas.tag_lower(fill_id, box_shape_id)
+        self.prayer_box_fill_ids['Shrouq'] = fill_id
+        self.prayer_box_fill_styles['Shrouq'] = {
+            'x': x,
+            'y': y,
+            'width': width,
+            'height': height,
+            'radius': corner_radius
+        }
         
         # Rotating Shrouq name (English/Arabic)
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
@@ -4461,6 +4652,7 @@ class IslamicBackground:
         prefix_size = int(self.next_prayer_prefix_font.cget('size'))
         min_line_size = max(18, self.fs(28, 14))
         min_prefix_size = max(14, self.fs(22, 12))
+        rtl_gap = max(6, self.fs(8, 4))
 
         while True:
             line_font_obj = tkfont.Font(family='Arial', size=line_size, weight='bold')
@@ -4470,7 +4662,10 @@ class IslamicBackground:
             name_width = line_font_obj.measure(name_text)
             in_width = line_font_obj.measure(in_text)
             countdown_width = line_font_obj.measure('88:88:88')
-            total_width = prefix_width + name_width + in_width + countdown_width
+            if rtl_mode:
+                total_width = prefix_width + name_width + in_width + countdown_width + (rtl_gap * 3)
+            else:
+                total_width = prefix_width + name_width + in_width + countdown_width
 
             unconstrained_panel_width = max(260, total_width + (self.next_prayer_panel_padding_x * 2))
             max_panel_width = self.next_prayer_max_panel_width if self.next_prayer_max_panel_width else unconstrained_panel_width
@@ -4516,21 +4711,21 @@ class IslamicBackground:
                 anchor='e'
             )
             self.next_prayer_name_text_id = self.canvas.create_text(
-                right_x - prefix_width, line_center_y,
+                right_x - prefix_width - rtl_gap, line_center_y,
                 text=name_text,
                 font=line_font,
                 fill=palette['next_name_text'],
                 anchor='e'
             )
             self.next_prayer_in_text_id = self.canvas.create_text(
-                right_x - prefix_width - name_width, line_center_y,
+                right_x - prefix_width - rtl_gap - name_width - rtl_gap, line_center_y,
                 text=in_text,
                 font=line_font,
                 fill=palette['next_in_text'],
                 anchor='e'
             )
             self.countdown_text_id = self.canvas.create_text(
-                right_x - prefix_width - name_width - in_width, line_center_y,
+                right_x - prefix_width - rtl_gap - name_width - rtl_gap - in_width - rtl_gap, line_center_y,
                 text=countdown_text,
                 font=line_font,
                 fill=palette['next_countdown_text'],
