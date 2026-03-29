@@ -19,6 +19,7 @@ from PIL import Image, ImageTk, ImageDraw
 import urllib.request
 import urllib.parse
 import threading
+import random
 
 try:
     from hijri_converter import Hijri, Gregorian
@@ -203,6 +204,8 @@ class IslamicBackground:
         self.weather_last_fetch = 0
         self.weather_fetch_interval = 1800  # 30 minutes
         self._weather_fetching = False
+        self._weather_show_forecast = False  # False=current temp, True=forecast
+        self._weather_cycle_after_id = None
         
         # Tracking for prayer time changes (tomorrow vs today)
         self.changing_prayers = {}  # {prayer_name: {today: time, tomorrow: time}}
@@ -481,6 +484,12 @@ class IslamicBackground:
             self._alpha_image_refs = {}
             self.prayer_box_fill_ids = {}
             self.prayer_box_fill_styles = {}
+            if self._weather_cycle_after_id:
+                try:
+                    self.root.after_cancel(self._weather_cycle_after_id)
+                except:
+                    pass
+                self._weather_cycle_after_id = None
             self.draw_islamic_background()
             self.draw_prayer_times()
             self.draw_test_mode_indicator()
@@ -1254,15 +1263,25 @@ class IslamicBackground:
         app_dir = Path(__file__).resolve().parent
         bg_folder = app_dir / 'images' / 'background'
         
-        # Daily rotation from images/background/ folder
+        # Daily rotation from images/background/ folder (shuffle-based)
         if bg_folder.is_dir():
             bg_images = sorted([
                 f for f in bg_folder.iterdir()
                 if f.is_file() and f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
             ])
             if bg_images:
+                n = len(bg_images)
                 day_of_year = self.get_current_date().timetuple().tm_yday
-                chosen = bg_images[day_of_year % len(bg_images)]
+                # Which cycle (group of n days) and position within that cycle
+                cycle = day_of_year // n
+                pos = day_of_year % n
+                # Shuffle with a seed based on year + cycle so each cycle
+                # shows all images in a different random order
+                year = self.get_current_date().year
+                rng = random.Random(year * 1000 + cycle)
+                indices = list(range(n))
+                rng.shuffle(indices)
+                chosen = bg_images[indices[pos]]
                 return chosen.resolve()
 
         # Fallback to configured background_image setting
@@ -2641,11 +2660,22 @@ class IslamicBackground:
                         
                         # For RTL Arabic, keep segments separate but enforce a visible gap.
                         if rtl_mode:
-                            prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
-                            name_width = self.next_prayer_line_font.measure(name_text)
-                            in_width = self.next_prayer_line_font.measure(in_text)
-                            countdown_width = self.next_prayer_countdown_fixed_width
                             rtl_gap = self.us(18, 9)
+                            if text_parts != self._next_prayer_last_text_parts:
+                                prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
+                                name_width = self.next_prayer_line_font.measure(name_text)
+                                in_width = self.next_prayer_line_font.measure(in_text)
+                                countdown_width = self.next_prayer_countdown_fixed_width
+                                self._next_prayer_last_text_parts = text_parts
+                                self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
+                                static_total_width = prefix_width + name_width + in_width + countdown_width + (rtl_gap * 3)
+                                unconstrained_static_width = max(260, static_total_width + (self.next_prayer_panel_padding_x * 2))
+                                if self.next_prayer_max_panel_width:
+                                    self.next_prayer_static_width = min(unconstrained_static_width, self.next_prayer_max_panel_width)
+                                else:
+                                    self.next_prayer_static_width = unconstrained_static_width
+                            else:
+                                prefix_width, name_width, in_width, countdown_width = self._next_prayer_last_widths
                             total_width = prefix_width + name_width + in_width + countdown_width + (rtl_gap * 3)
                         else:
                             # For LTR English, keep separate measurements as before
@@ -3638,58 +3668,46 @@ class IslamicBackground:
             pass
 
     def draw_weather(self, width, height):
-        """Draw current temperature and 3-day forecast in top-left corner."""
+        """Draw current temperature and forecast in top-left, cycling between them."""
         if not self.weather_data:
             return
 
         x_start = self.us(20, 10)
-        y_start = self.us(60, 30)
+        y_start = self.us(100, 50)
         padding = self.us(12, 6)
-
-        # Panel dimensions (no visible box, just for layout)
         panel_w = self.us(340, 180)
-        panel_h = self.us(168, 90)
 
-        # Current temperature - large
+        # Current temperature group
         temp_text = f"{self.weather_data['current_temp']}°C"
         icon_text = self.weather_data['current_icon']
-        desc_text = self.weather_data['current_desc']
 
         curr_x = x_start + padding
         curr_y = y_start + padding
 
-        # Icon
         icon_size = self.fs(36, 18)
         self.canvas.create_text(
             curr_x, curr_y,
             text=icon_text,
             font=('Segoe UI Emoji', icon_size),
             fill='white',
-            anchor='nw'
+            anchor='nw',
+            tags='weather_current'
         )
 
-        # Temperature
-        temp_size = self.fs(38, 19)
+        temp_size = self.fs(48, 24)
         self.canvas.create_text(
             curr_x + self.us(70, 36), curr_y,
             text=temp_text,
             font=('Arial', temp_size, 'bold'),
             fill='#ffffff',
-            anchor='nw'
+            anchor='nw',
+            tags='weather_current'
         )
 
-        # Separator line
-        sep_y = y_start + self.us(88, 46)
-        self.canvas.create_line(
-            x_start + padding, sep_y,
-            x_start + panel_w - padding, sep_y,
-            fill='#1a3a6a', width=1
-        )
-
-        # 2-day forecast
+        # Forecast group (same position, initially hidden)
         forecast = self.weather_data.get('forecast', [])
         if forecast:
-            forecast_y = sep_y + self.us(14, 7)
+            forecast_y = y_start + padding
             col_width = (panel_w - 2 * padding) / len(forecast)
             forecast_font = self.fs(30, 15)
             icon_font = self.fs(28, 14)
@@ -3697,32 +3715,96 @@ class IslamicBackground:
             for i, day in enumerate(forecast):
                 cx = x_start + padding + col_width * i + col_width / 2
 
-                # Day name
                 self.canvas.create_text(
                     cx, forecast_y,
                     text=day['day'],
                     font=('Arial', forecast_font, 'bold'),
                     fill='#c0d0e8',
-                    anchor='n'
+                    anchor='n',
+                    tags='weather_forecast'
                 )
 
-                # Icon
                 self.canvas.create_text(
-                    cx, forecast_y + self.us(32, 16),
+                    cx, forecast_y + self.us(44, 22),
                     text=day['icon'],
                     font=('Segoe UI Emoji', icon_font),
                     fill='white',
-                    anchor='n'
+                    anchor='n',
+                    tags='weather_forecast'
                 )
 
-                # High/Low
                 self.canvas.create_text(
-                    cx, forecast_y + self.us(72, 36),
+                    cx, forecast_y + self.us(96, 48),
                     text=f"{day['high']}° / {day['low']}°",
                     font=('Arial', self.fs(30, 15), 'bold'),
                     fill='#8aadcc',
-                    anchor='n'
+                    anchor='n',
+                    tags='weather_forecast'
                 )
+
+        # Set initial visibility based on current state
+        if self._weather_show_forecast:
+            self._set_weather_group_state('weather_current', 'hidden')
+            self._set_weather_group_state('weather_forecast', 'normal')
+        else:
+            self._set_weather_group_state('weather_current', 'normal')
+            self._set_weather_group_state('weather_forecast', 'hidden')
+
+        # Start cycle timer
+        self._start_weather_cycle()
+
+    def _set_weather_group_state(self, tag, state):
+        """Set all canvas items with given tag to state ('normal' or 'hidden')."""
+        for item_id in self.canvas.find_withtag(tag):
+            self.canvas.itemconfig(item_id, state=state)
+
+    def _start_weather_cycle(self):
+        """Start the weather display cycle timer."""
+        if self._weather_cycle_after_id:
+            try:
+                self.root.after_cancel(self._weather_cycle_after_id)
+            except:
+                pass
+        # Current temp shows for 15s, forecast for 5s
+        delay = 5000 if self._weather_show_forecast else 15000
+        self._weather_cycle_after_id = self.root.after(delay, self._weather_cycle_step)
+
+    def _weather_cycle_step(self):
+        """Fade out current weather group, fade in next."""
+        try:
+            self._weather_fade_out(step=0)
+        except:
+            pass
+
+    def _weather_fade_out(self, step=0):
+        """Fade out the currently visible group over several steps."""
+        total_steps = 6
+        if step < total_steps:
+            # Gradually reduce visibility isn't possible with state alone,
+            # so we do a quick hide after a short delay for a clean transition
+            self.root.after(40, lambda: self._weather_fade_out(step + 1))
+            return
+
+        # Switch groups
+        if self._weather_show_forecast:
+            self._set_weather_group_state('weather_forecast', 'hidden')
+            self._weather_show_forecast = False
+            self._weather_fade_in('weather_current', step=0)
+        else:
+            self._set_weather_group_state('weather_current', 'hidden')
+            self._weather_show_forecast = True
+            self._weather_fade_in('weather_forecast', step=0)
+
+    def _weather_fade_in(self, tag, step=0):
+        """Fade in the new weather group."""
+        total_steps = 6
+        if step == 0:
+            self._set_weather_group_state(tag, 'normal')
+        if step < total_steps:
+            self.root.after(40, lambda: self._weather_fade_in(tag, step + 1))
+            return
+        # Restart cycle
+        self._start_weather_cycle()
 
     def draw_quran_verse(self, width, height):
         """Draw Quranic verse above prayer times with translation"""
@@ -4353,8 +4435,11 @@ class IslamicBackground:
 
     def draw_alpha_fill(self, x, y, width, height, fill_color, opacity_percent, radius=0, tags=()):
         """Draw smooth alpha fill using an RGBA image (avoids stipple mesh)."""
-        w = max(1, int(round(width)))
-        h = max(1, int(round(height)))
+        # Expand fill by a few pixels so corners fully cover the area
+        # inside the rounded outline (PIL circular arcs vs tkinter B-spline mismatch).
+        pad = 3 if radius > 0 else 0
+        w = max(1, int(round(width)) + pad * 2)
+        h = max(1, int(round(height)) + pad * 2)
         alpha = max(0, min(255, int(round((max(0, min(100, opacity_percent)) / 100.0) * 255))))
         r, g, b = self._color_to_rgb(fill_color)
 
@@ -4368,7 +4453,7 @@ class IslamicBackground:
             draw.rectangle((0, 0, w - 1, h - 1), fill=rgba)
 
         photo = ImageTk.PhotoImage(img)
-        image_id = self.canvas.create_image(int(round(x)), int(round(y)), image=photo, anchor='nw', tags=tags)
+        image_id = self.canvas.create_image(int(round(x - pad)), int(round(y - pad)), image=photo, anchor='nw', tags=tags)
         self._alpha_image_refs[image_id] = photo
         return image_id
 
