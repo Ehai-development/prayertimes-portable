@@ -687,6 +687,7 @@ class IslamicBackground:
             return
 
         if self.draw_background_image(width, height):
+            self.draw_background_image_label(width, height)
             return
 
         theme = self.get_theme_name()
@@ -1351,6 +1352,72 @@ class IslamicBackground:
 
         self.canvas.create_image(0, 0, image=self.background_photo_image, anchor='nw')
         return True
+
+    def draw_background_image_label(self, width, height):
+        """Draw masjid name and location label on the background image.
+        
+        Filename format: 'Name - Location.ext' => name on top, location below with decorative lines.
+        """
+        image_path = self.get_background_image_path()
+        if image_path is None:
+            return
+
+        stem = Path(str(image_path)).stem
+        if stem.lower() == 'unknown masjid':
+            return
+
+        # Parse "Name - Location" from filename
+        if ' - ' in stem:
+            name_part, location_part = stem.rsplit(' - ', 1)
+        else:
+            name_part = stem
+            location_part = ''
+
+        cx = width // 2
+        top_y = height - self.us(170, 85)
+
+        # Masjid name - large italic serif
+        name_font = ('Georgia', self.fs(48, 24), 'bold italic')
+        self.draw_outlined_text(
+            cx, top_y, name_part,
+            font=name_font, fill='white', outline='black', outline_px=2,
+            anchor='center'
+        )
+
+        if location_part:
+            loc_y = top_y + self.us(50, 25)
+            loc_font = ('Arial', self.fs(22, 11), 'bold')
+            loc_text = location_part.upper()
+
+            # Measure location text width for decorative lines
+            tmp_id = self.canvas.create_text(0, 0, text=loc_text, font=loc_font)
+            bbox = self.canvas.bbox(tmp_id)
+            self.canvas.delete(tmp_id)
+            text_w = (bbox[2] - bbox[0]) if bbox else self.us(120, 60)
+
+            line_len = self.us(60, 30)
+            line_gap = self.us(16, 8)
+            line_y = loc_y
+
+            # Left decorative line
+            self.canvas.create_line(
+                cx - text_w // 2 - line_gap - line_len, line_y,
+                cx - text_w // 2 - line_gap, line_y,
+                fill='white', width=self.us(2, 1)
+            )
+            # Right decorative line
+            self.canvas.create_line(
+                cx + text_w // 2 + line_gap, line_y,
+                cx + text_w // 2 + line_gap + line_len, line_y,
+                fill='white', width=self.us(2, 1)
+            )
+
+            # Location text
+            self.draw_outlined_text(
+                cx, loc_y, loc_text,
+                font=loc_font, fill='white', outline='black', outline_px=1,
+                anchor='center'
+            )
 
     def draw_overlay_background(self, width, height, tags='iqamah_overlay'):
         """Draw configured background image for full-screen overlays; fallback to solid fill."""
@@ -3913,7 +3980,7 @@ class IslamicBackground:
         
         # Calculate box dimensions - all same size
         box_width = self.us(320, 190)
-        box_height = self.us(230, 140)
+        box_height = self.us(255, 155)
         lower_row_box_height = box_height
         spacing = self.us(30, 15)
         
@@ -4166,12 +4233,8 @@ class IslamicBackground:
 
             show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
             if show_arabic_name:
-                progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
-                start_size = self.fs(30, 15)
-                end_size = self.fs(32, 16)
-                size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
                 name_text = arabic
-                name_font = ('Arial', size, 'bold')
+                name_font = ('Arial', self.fs(30, 15), 'bold')
             else:
                 name_text = display_name
                 name_font = ('Arial', self.fs(30, 15), 'bold')
@@ -4194,18 +4257,20 @@ class IslamicBackground:
             outline_color = palette['card_outline']
             outline_w = 3
         
-        # Draw smooth alpha background then crisp outline
+        # Draw smooth alpha background with outline in same PIL image (no corner gaps)
         corner_radius = self.us(40, 22)
         fill_id = self.draw_alpha_fill(
             x, y, width, height,
             fill_color=fill_color,
             opacity_percent=self.prayer_box_opacity_percent,
-            radius=corner_radius
+            radius=corner_radius,
+            outline_color=outline_color,
+            outline_width=outline_w
         )
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, corner_radius, fill='', outline=outline_color, outline_width=outline_w)
-        self.canvas.tag_lower(fill_id, box_shape_id)
+        box_shape_id = fill_id
         if prayer_key:
             self.prayer_box_fill_ids[prayer_key] = fill_id
+            self.prayer_box_shape_ids[prayer_key] = fill_id
             self.prayer_box_fill_styles[prayer_key] = {
                 'x': x,
                 'y': y,
@@ -4234,12 +4299,8 @@ class IslamicBackground:
         # Rotating prayer name (English/Arabic)
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
         if show_arabic_name:
-            progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
-            start_size = self.fs(42, 21)
-            end_size = self.fs(46, 24)
-            size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
             name_text = arabic
-            name_font = ('Arial', size, 'bold')
+            name_font = ('Arial', self.fs(42, 21), 'bold')
         else:
             name_text = name
             name_font = ('Arial', self.fs(42, 21), 'bold')
@@ -4384,17 +4445,13 @@ class IslamicBackground:
             try:
                 if prayer_key == blinking_prayer:
                     if blink_visible:
-                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'])
-                        self.canvas.itemconfig(shape_id, fill='', outline=palette['card_current_outline'], width=4)
+                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'], palette['card_current_outline'], 4)
                     else:
-                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'])
-                        self.canvas.itemconfig(shape_id, fill='', outline=palette['card_outline'], width=3)
+                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'], palette['card_outline'], 3)
                 elif prayer_key == current_prayer:
-                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'])
-                    self.canvas.itemconfig(shape_id, fill='', outline=palette['card_current_outline'], width=4)
+                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'], palette['card_current_outline'], 4)
                 else:
-                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'])
-                    self.canvas.itemconfig(shape_id, fill='', outline=palette['card_outline'], width=3)
+                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'], palette['card_outline'], 3)
             except:
                 pass
     
@@ -4433,56 +4490,79 @@ class IslamicBackground:
         except:
             return (255, 255, 255)
 
-    def draw_alpha_fill(self, x, y, width, height, fill_color, opacity_percent, radius=0, tags=()):
-        """Draw smooth alpha fill using an RGBA image (avoids stipple mesh)."""
-        # Expand fill by a few pixels so corners fully cover the area
-        # inside the rounded outline (PIL circular arcs vs tkinter B-spline mismatch).
-        pad = 3 if radius > 0 else 0
-        w = max(1, int(round(width)) + pad * 2)
-        h = max(1, int(round(height)) + pad * 2)
+    def draw_alpha_fill(self, x, y, width, height, fill_color, opacity_percent, radius=0, tags=(), outline_color=None, outline_width=0):
+        """Draw smooth alpha fill using an RGBA image, optionally with outline in the same image."""
+        w = max(1, int(round(width)))
+        h = max(1, int(round(height)))
         alpha = max(0, min(255, int(round((max(0, min(100, opacity_percent)) / 100.0) * 255))))
         r, g, b = self._color_to_rgb(fill_color)
 
         img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
         draw = ImageDraw.Draw(img)
         rgba = (r, g, b, alpha)
+        rad = max(1, int(round(radius))) if radius > 0 else 0
 
-        if radius > 0:
-            draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=max(1, int(round(radius))), fill=rgba)
+        if rad > 0:
+            draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=rad, fill=rgba)
         else:
             draw.rectangle((0, 0, w - 1, h - 1), fill=rgba)
 
+        # Draw outline on the same image so fill and outline match perfectly
+        if outline_color and outline_width > 0:
+            or_, og, ob = self._color_to_rgb(outline_color)
+            ow = max(1, int(round(outline_width)))
+            outline_rgba = (or_, og, ob, 255)
+            if rad > 0:
+                draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=rad, fill=None, outline=outline_rgba, width=ow)
+            else:
+                draw.rectangle((0, 0, w - 1, h - 1), fill=None, outline=outline_rgba, width=ow)
+
         photo = ImageTk.PhotoImage(img)
-        image_id = self.canvas.create_image(int(round(x - pad)), int(round(y - pad)), image=photo, anchor='nw', tags=tags)
+        image_id = self.canvas.create_image(int(round(x)), int(round(y)), image=photo, anchor='nw', tags=tags)
         self._alpha_image_refs[image_id] = photo
         return image_id
 
-    def update_prayer_box_alpha_fill(self, prayer_key, fill_color):
-        """Recreate alpha fill image for a prayer box when highlight state changes."""
+    def update_prayer_box_alpha_fill(self, prayer_key, fill_color, outline_color=None, outline_width=0):
+        """Update alpha fill+outline image in-place for a prayer box (no z-order change)."""
         style = self.prayer_box_fill_styles.get(prayer_key)
         if not style:
             return
 
         old_id = self.prayer_box_fill_ids.get(prayer_key)
-        if old_id:
-            try:
-                self.canvas.delete(old_id)
-            except:
-                pass
-            self._alpha_image_refs.pop(old_id, None)
+        if not old_id:
+            return
 
-        new_id = self.draw_alpha_fill(
-            style['x'], style['y'], style['width'], style['height'],
-            fill_color, self.prayer_box_opacity_percent, radius=style.get('radius', 0)
-        )
-        self.prayer_box_fill_ids[prayer_key] = new_id
+        w = max(1, int(round(style['width'])))
+        h = max(1, int(round(style['height'])))
+        alpha = max(0, min(255, int(round((max(0, min(100, self.prayer_box_opacity_percent)) / 100.0) * 255))))
+        r, g, b = self._color_to_rgb(fill_color)
+        rad = max(1, int(round(style.get('radius', 0)))) if style.get('radius', 0) > 0 else 0
 
-        outline_id = self.prayer_box_shape_ids.get(prayer_key)
-        if outline_id:
-            try:
-                self.canvas.tag_lower(new_id, outline_id)
-            except:
-                pass
+        img = Image.new('RGBA', (w, h), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        rgba = (r, g, b, alpha)
+
+        if rad > 0:
+            draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=rad, fill=rgba)
+        else:
+            draw.rectangle((0, 0, w - 1, h - 1), fill=rgba)
+
+        if outline_color and outline_width > 0:
+            or_, og, ob = self._color_to_rgb(outline_color)
+            ow = max(1, int(round(outline_width)))
+            outline_rgba = (or_, og, ob, 255)
+            if rad > 0:
+                draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=rad, fill=None, outline=outline_rgba, width=ow)
+            else:
+                draw.rectangle((0, 0, w - 1, h - 1), fill=None, outline=outline_rgba, width=ow)
+
+        # Update the existing canvas image in-place (preserves z-order)
+        new_photo = ImageTk.PhotoImage(img)
+        try:
+            self.canvas.itemconfig(old_id, image=new_photo)
+        except:
+            pass
+        self._alpha_image_refs[old_id] = new_photo
     
     def draw_khutbah_box(self, x, y, width, height, is_current=False):
         """Draw Khutbah (Friday Sermon) box"""
@@ -4502,11 +4582,13 @@ class IslamicBackground:
             x, y, width, height,
             fill_color=fill_color,
             opacity_percent=self.prayer_box_opacity_percent,
-            radius=corner_radius
+            radius=corner_radius,
+            outline_color=outline_color,
+            outline_width=outline_w
         )
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, corner_radius, fill='', outline=outline_color, outline_width=outline_w)
-        self.canvas.tag_lower(fill_id, box_shape_id)
+        box_shape_id = fill_id
         self.prayer_box_fill_ids['Jummah'] = fill_id
+        self.prayer_box_shape_ids['Jummah'] = fill_id
         self.prayer_box_fill_styles['Jummah'] = {
             'x': x,
             'y': y,
@@ -4518,12 +4600,8 @@ class IslamicBackground:
         # Rotate only the top prayer name (JUMMAH <-> العربية); keep KHUTBAH in English
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
         if show_arabic_name:
-            progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
-            start_size = self.fs(42, 21)
-            end_size = self.fs(46, 24)
-            size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
             title_text = 'الجمعة'
-            title_font = ('Arial', size, 'bold')
+            title_font = ('Arial', self.fs(42, 21), 'bold')
         else:
             title_text = 'JUMMAH'
             title_font = ('Arial', self.fs(42, 21), 'bold')
@@ -4558,7 +4636,7 @@ class IslamicBackground:
         
         # Draw "ALL YEAR LONG" using the same color as iqamah text
         self.canvas.create_text(
-            x + width/2, y + self.us(174, 84) + text_y_offset,
+            x + width/2, y + height - self.us(40, 20),
             text='ALL YEAR LONG',
             font=('Arial', self.fs(28, 14), 'bold'),
             fill=palette['iqamah_text']
@@ -4578,17 +4656,19 @@ class IslamicBackground:
             outline_color = palette['card_outline']
             outline_w = 3
 
-        # Draw smooth alpha background then crisp outline
+        # Draw smooth alpha background with outline in same PIL image
         corner_radius = self.us(40, 22)
         fill_id = self.draw_alpha_fill(
             x, y, width, height,
             fill_color=fill_color,
             opacity_percent=self.prayer_box_opacity_percent,
-            radius=corner_radius
+            radius=corner_radius,
+            outline_color=outline_color,
+            outline_width=outline_w
         )
-        box_shape_id = self.draw_rounded_rectangle(x, y, width, height, corner_radius, fill='', outline=outline_color, outline_width=outline_w)
-        self.canvas.tag_lower(fill_id, box_shape_id)
+        box_shape_id = fill_id
         self.prayer_box_fill_ids['Shrouq'] = fill_id
+        self.prayer_box_shape_ids['Shrouq'] = fill_id
         self.prayer_box_fill_styles['Shrouq'] = {
             'x': x,
             'y': y,
@@ -4600,12 +4680,8 @@ class IslamicBackground:
         # Rotating Shrouq name (English/Arabic)
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
         if show_arabic_name:
-            progress = self.salah_name_transition_progress if self.salah_name_transition_active else 1.0
-            start_size = self.fs(42, 21)
-            end_size = self.fs(46, 24)
-            size = max(1, int(round(start_size + ((end_size - start_size) * progress))))
             title_text = 'الشروق'
-            title_font = ('Arial', size, 'bold')
+            title_font = ('Arial', self.fs(42, 21), 'bold')
         else:
             title_text = 'SHROUQ'
             title_font = ('Arial', self.fs(42, 21), 'bold')
@@ -4712,7 +4788,7 @@ class IslamicBackground:
             outline_id = self.canvas.create_text(
                 x + dx, current_time_y + dy,
                 text=current_time_text,
-                font=('Arial', self.fs(80, 39), 'bold'),
+                font=('Arial', self.fs(100, 49), 'bold'),
                 fill='black'
             )
             self.current_time_outline_ids.append(outline_id)
@@ -4720,7 +4796,7 @@ class IslamicBackground:
         self.current_time_text_id = self.canvas.create_text(
             x, current_time_y,
             text=current_time_text,
-            font=('Arial', self.fs(80, 39), 'bold'),
+            font=('Arial', self.fs(100, 49), 'bold'),
             fill='white'
         )
 
@@ -4914,7 +4990,7 @@ class IslamicBackground:
         self.update_prayer_time_toggle()
 
     def _start_salah_name_transition(self, target_show_arabic):
-        """Switch language immediately; animate Arabic reveal without showing mixed text."""
+        """Switch language instantly with a single clean redraw."""
         target_show_arabic = bool(target_show_arabic)
         self.salah_name_transition_target_arabic = target_show_arabic
         self.salah_names_show_arabic = target_show_arabic
@@ -4925,25 +5001,12 @@ class IslamicBackground:
                 self.root.after_cancel(self.salah_name_transition_after_id)
             except:
                 pass
+            self.salah_name_transition_after_id = None
 
-        # English mode switches instantly; Arabic mode reveals smoothly.
-        if not target_show_arabic:
-            self.salah_name_transition_active = False
-            self.salah_name_transition_progress = 1.0
-            if not self.iqamah_overlay_visible:
-                self.redraw_full_display()
-            return
-
-        self.salah_name_transition_active = True
-        self.salah_name_transition_progress = 0.0
-
+        self.salah_name_transition_active = False
+        self.salah_name_transition_progress = 1.0
         if not self.iqamah_overlay_visible:
             self.redraw_full_display()
-
-        self.salah_name_transition_after_id = self.root.after(
-            self.salah_name_transition_tick_ms,
-            self._tick_salah_name_transition
-        )
 
     def _tick_salah_name_transition(self):
         """Advance Arabic reveal progress and request redraws."""
