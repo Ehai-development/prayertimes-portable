@@ -1353,7 +1353,7 @@ class IslamicBackground:
         self.canvas.create_image(0, 0, image=self.background_photo_image, anchor='nw')
         return True
 
-    def draw_background_image_label(self, width, height):
+    def draw_background_image_label(self, width, height, tags=()):
         """Draw masjid name and location label on the background image.
         
         Filename format: 'Name - Location.ext' => name on top, location below with decorative lines.
@@ -1381,7 +1381,7 @@ class IslamicBackground:
         self.draw_outlined_text(
             cx, top_y, name_part,
             font=name_font, fill='white', outline='black', outline_px=2,
-            anchor='center'
+            anchor='center', tags=tags
         )
 
         if location_part:
@@ -1403,20 +1403,20 @@ class IslamicBackground:
             self.canvas.create_line(
                 cx - text_w // 2 - line_gap - line_len, line_y,
                 cx - text_w // 2 - line_gap, line_y,
-                fill='white', width=self.us(2, 1)
+                fill='white', width=self.us(2, 1), tags=tags
             )
             # Right decorative line
             self.canvas.create_line(
                 cx + text_w // 2 + line_gap, line_y,
                 cx + text_w // 2 + line_gap + line_len, line_y,
-                fill='white', width=self.us(2, 1)
+                fill='white', width=self.us(2, 1), tags=tags
             )
 
             # Location text
             self.draw_outlined_text(
                 cx, loc_y, loc_text,
                 font=loc_font, fill='white', outline='black', outline_px=1,
-                anchor='center'
+                anchor='center', tags=tags
             )
 
     def draw_overlay_background(self, width, height, tags='iqamah_overlay'):
@@ -2970,6 +2970,8 @@ class IslamicBackground:
             )
             self.iqamah_overlay_ids.append(readability_veil)
 
+            self.draw_background_image_label(width, height, tags='iqamah_overlay')
+
             # Live current time (bottom-left, white rounded background)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
             time_font = ('Arial', self.fs(50, 24), 'bold')
@@ -3023,7 +3025,7 @@ class IslamicBackground:
                 fill='#2E7D32',
                 outline='white',
                 outline_px=self.us(3, 2),
-                tags='iqamah_overlay'
+                tags=('iqamah_overlay', 'iqamah_prayer_line_text')
             )
             self.iqamah_overlay_ids.append(prayer_text)
 
@@ -3046,7 +3048,7 @@ class IslamicBackground:
                 text=instruction_line_text,
                 font=('Arial', instruction_font_size, 'bold'),
                 fill='black',
-                tags='iqamah_overlay'
+                tags=('iqamah_overlay', 'iqamah_instruction_text')
             )
             self.iqamah_overlay_ids.append(instruction_text)
 
@@ -3089,7 +3091,13 @@ class IslamicBackground:
             
             self.iqamah_overlay_visible = True
             self.iqamah_overlay_mode = 'countdown'
-            
+
+            # Start English/Arabic text toggle for countdown overlay
+            self._iqamah_countdown_lang_english = True
+            self._iqamah_countdown_is_friday = is_friday_khutbah
+            self._iqamah_countdown_prayer_name = self.current_prayer_name
+            self._iqamah_countdown_toggle_id = self.root.after(5000, self._schedule_iqamah_countdown_text_toggle)
+
         except Exception as e:
             self._log(f"ERROR in show_iqamah_overlay: {e}")
             import traceback
@@ -3113,7 +3121,10 @@ class IslamicBackground:
                 radius=0,
                 tags='iqamah_overlay'
             )
+
             self.iqamah_overlay_ids.append(readability_veil)
+
+            self.draw_background_image_label(width, height, tags='iqamah_overlay')
 
             # Live current time (bottom-left, white rounded background)
             current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
@@ -3147,7 +3158,7 @@ class IslamicBackground:
             ayah_y = height * 0.24
             notice_y = ayah_y + self.us(185, 105)
             icon_y = notice_y + self.us(220, 125)
-            prayer_now_y = icon_y + self.us(230, 130)
+            prayer_now_y = time_bg_y + (_th + time_pad_y * 2) / 2
 
             ayah_text = self.draw_outlined_text(
                 width / 2, ayah_y,
@@ -3165,7 +3176,7 @@ class IslamicBackground:
                 text='Please put your cell phone on silent mode',
                 font=('Arial', self.fs(62, 30), 'bold'),
                 fill='black',
-                tags='iqamah_overlay'
+                tags=('iqamah_overlay', 'post_instruction_text')
             )
             self.iqamah_overlay_ids.append(instruction_text)
 
@@ -3179,7 +3190,7 @@ class IslamicBackground:
                 fill='#d32f2f',
                 outline='white',
                 outline_px=self.us(3, 2),
-                tags='iqamah_overlay'
+                tags=('iqamah_overlay', 'post_prayer_now_text')
             )
             self.iqamah_overlay_ids.append(prayer_now_text)
 
@@ -3189,14 +3200,76 @@ class IslamicBackground:
             self.iqamah_overlay_visible = True
             self.iqamah_overlay_mode = 'post'
 
+            # Start English/Arabic text toggle (5s each language, 10s cycle)
+            self._post_overlay_lang_english = True
+            self._post_overlay_toggle_id = self.root.after(5000, self._schedule_post_overlay_text_toggle)
+
         except Exception as e:
             self._log(f"ERROR in show_post_iqamah_overlay: {e}")
             import traceback
             if getattr(self, 'show_logs', False): traceback.print_exc()
 
+    def _schedule_iqamah_countdown_text_toggle(self):
+        """Toggle instruction & prayer-line text on countdown overlay between English and Arabic every 5s."""
+        if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'countdown':
+            self._iqamah_countdown_toggle_id = None
+            return
+        arabic_names = {
+            'Fajr': 'الفجر', 'Duhr': 'الظهر', 'Dhuhr': 'الظهر',
+            'Asr': 'العصر', 'Maghrib': 'المغرب', 'Isha': 'العشاء',
+            'Jummah': 'الجمعة', 'Shrouq': 'الشروق'
+        }
+        self._iqamah_countdown_lang_english = not self._iqamah_countdown_lang_english
+        is_friday = getattr(self, '_iqamah_countdown_is_friday', False)
+        prayer_name = getattr(self, '_iqamah_countdown_prayer_name', '') or ''
+        if self._iqamah_countdown_lang_english:
+            if is_friday:
+                prayer_line = 'Jummah khutbah in'
+                instr = 'Talking is forbidden during Khutbahs'
+            else:
+                prayer_line = f"{prayer_name.upper()} iqamah in"
+                instr = 'Please put your cell phone on silent mode'
+        else:
+            arabic_name = arabic_names.get(prayer_name, prayer_name)
+            if is_friday:
+                prayer_line = f'خطبة {arabic_name} بعد'
+                instr = 'يُمنع الكلام أثناء الخطبة'
+            else:
+                prayer_line = f'إقامة {arabic_name} بعد'
+                instr = 'يرجى وضع هاتفك على الوضع الصامت'
+        for item_id in self.canvas.find_withtag('iqamah_prayer_line_text'):
+            self.canvas.itemconfig(item_id, text=prayer_line)
+        for item_id in self.canvas.find_withtag('iqamah_instruction_text'):
+            self.canvas.itemconfig(item_id, text=instr)
+        self._iqamah_countdown_toggle_id = self.root.after(5000, self._schedule_iqamah_countdown_text_toggle)
+
+    def _schedule_post_overlay_text_toggle(self):
+        """Toggle instruction & prayer-now text between English and Arabic every 5s."""
+        if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'post':
+            self._post_overlay_toggle_id = None
+            return
+        self._post_overlay_lang_english = not self._post_overlay_lang_english
+        if self._post_overlay_lang_english:
+            instr = 'Please put your cell phone on silent mode'
+            pnow = 'Prayer is now'
+        else:
+            instr = 'يرجى وضع هاتفك على الوضع الصامت'
+            pnow = 'الصلاة الآن'
+        for item_id in self.canvas.find_withtag('post_instruction_text'):
+            self.canvas.itemconfig(item_id, text=instr)
+        for item_id in self.canvas.find_withtag('post_prayer_now_text'):
+            self.canvas.itemconfig(item_id, text=pnow)
+        self._post_overlay_toggle_id = self.root.after(5000, self._schedule_post_overlay_text_toggle)
+
     def clear_iqamah_overlay_items(self):
         """Delete overlay canvas items while preserving overlay state variables."""
         try:
+            # Cancel text toggle timers
+            for attr in ('_post_overlay_toggle_id', '_iqamah_countdown_toggle_id'):
+                toggle_id = getattr(self, attr, None)
+                if toggle_id:
+                    self.root.after_cancel(toggle_id)
+                    setattr(self, attr, None)
             for item_id in self.iqamah_overlay_ids:
                 try:
                     self.canvas.delete(item_id)
