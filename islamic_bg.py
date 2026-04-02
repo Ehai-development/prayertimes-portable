@@ -2954,6 +2954,12 @@ class IslamicBackground:
     def show_iqamah_overlay(self):
         """Show the full-screen Iqamah countdown overlay"""
         try:
+            # Cancel any existing toggle timer before redrawing
+            toggle_id = getattr(self, '_iqamah_countdown_toggle_id', None)
+            if toggle_id:
+                self.root.after_cancel(toggle_id)
+                self._iqamah_countdown_toggle_id = None
+
             width = self.canvas.winfo_width()
             height = self.canvas.winfo_height()
             
@@ -3096,7 +3102,7 @@ class IslamicBackground:
             self._iqamah_countdown_lang_english = True
             self._iqamah_countdown_is_friday = is_friday_khutbah
             self._iqamah_countdown_prayer_name = self.current_prayer_name
-            self._iqamah_countdown_toggle_id = self.root.after(5000, self._schedule_iqamah_countdown_text_toggle)
+            self._iqamah_countdown_toggle_id = self.root.after(10000, self._schedule_iqamah_countdown_text_toggle)
 
         except Exception as e:
             self._log(f"ERROR in show_iqamah_overlay: {e}")
@@ -3106,6 +3112,12 @@ class IslamicBackground:
     def show_post_iqamah_overlay(self):
         """Show post-iqamah overlay for 3 minutes with ayah and prayer notice."""
         try:
+            # Cancel any existing toggle timer before redrawing
+            toggle_id = getattr(self, '_post_overlay_toggle_id', None)
+            if toggle_id:
+                self.root.after_cancel(toggle_id)
+                self._post_overlay_toggle_id = None
+
             self.clear_iqamah_overlay_items()
             width = self.canvas.winfo_width()
             height = self.canvas.winfo_height()
@@ -3200,9 +3212,9 @@ class IslamicBackground:
             self.iqamah_overlay_visible = True
             self.iqamah_overlay_mode = 'post'
 
-            # Start English/Arabic text toggle (5s each language, 10s cycle)
+            # Start English/Arabic text toggle (English 10s, Arabic 5s)
             self._post_overlay_lang_english = True
-            self._post_overlay_toggle_id = self.root.after(5000, self._schedule_post_overlay_text_toggle)
+            self._post_overlay_toggle_id = self.root.after(10000, self._schedule_post_overlay_text_toggle)
 
         except Exception as e:
             self._log(f"ERROR in show_post_iqamah_overlay: {e}")
@@ -3241,7 +3253,9 @@ class IslamicBackground:
             self.canvas.itemconfig(item_id, text=prayer_line)
         for item_id in self.canvas.find_withtag('iqamah_instruction_text'):
             self.canvas.itemconfig(item_id, text=instr)
-        self._iqamah_countdown_toggle_id = self.root.after(5000, self._schedule_iqamah_countdown_text_toggle)
+        # English stays 10s, Arabic stays 5s
+        delay = 10000 if self._iqamah_countdown_lang_english else 5000
+        self._iqamah_countdown_toggle_id = self.root.after(delay, self._schedule_iqamah_countdown_text_toggle)
 
     def _schedule_post_overlay_text_toggle(self):
         """Toggle instruction & prayer-now text between English and Arabic every 5s."""
@@ -3259,7 +3273,9 @@ class IslamicBackground:
             self.canvas.itemconfig(item_id, text=instr)
         for item_id in self.canvas.find_withtag('post_prayer_now_text'):
             self.canvas.itemconfig(item_id, text=pnow)
-        self._post_overlay_toggle_id = self.root.after(5000, self._schedule_post_overlay_text_toggle)
+        # English stays 10s, Arabic stays 5s
+        delay = 10000 if self._post_overlay_lang_english else 5000
+        self._post_overlay_toggle_id = self.root.after(delay, self._schedule_post_overlay_text_toggle)
 
     def clear_iqamah_overlay_items(self):
         """Delete overlay canvas items while preserving overlay state variables."""
