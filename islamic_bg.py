@@ -159,6 +159,7 @@ class IslamicBackground:
 
         self.logo_base_image = None
         self.logo_image_path = None
+        self.logo_image_mtime = None
         self.background_base_image = None
         self.background_photo_image = None
         self.background_image_size = (0, 0)
@@ -3527,27 +3528,50 @@ class IslamicBackground:
         if not getattr(self, 'show_logo', False):
             return
         try:
-            target_size = (self.us(520), self.us(340))
-            images_dir = Path(__file__).parent / 'images'
+            target_size = (self.us(370), self.us(245))
+            # Resolve images dir: prefer folder next to exe (frozen) or cwd, then source dir
+            images_dir = None
+            if getattr(sys, 'frozen', False):
+                exe_images = Path(sys.executable).resolve().parent.parent / 'images'
+                if not exe_images.is_dir():
+                    exe_images = Path(sys.executable).resolve().parent / 'images'
+                if exe_images.is_dir():
+                    images_dir = exe_images
+            if images_dir is None:
+                cwd_images = Path.cwd() / 'images'
+                if cwd_images.is_dir():
+                    images_dir = cwd_images
+            if images_dir is None:
+                images_dir = Path(__file__).resolve().parent / 'images'
             primary_path = images_dir / 'main.png'
             fallback_path = images_dir / 'main.jpg'
             image_path = primary_path if primary_path.exists() else fallback_path
 
             if image_path.exists():
-                if self.logo_base_image is None or self.logo_image_path != str(image_path) or self.logo_image_size != target_size:
+                current_mtime = image_path.stat().st_mtime
+                if (self.logo_base_image is None or self.logo_image_path != str(image_path)
+                        or self.logo_image_size != target_size or self.logo_image_mtime != current_mtime):
                     with Image.open(image_path) as img:
                         self.logo_base_image = img.convert('RGBA').resize(target_size, Image.LANCZOS)
                         self.logo_image_size = target_size
                         self.logo_image_path = str(image_path)
+                        self.logo_image_mtime = current_mtime
 
                 if self.logo_base_image is not None:
                     self.logo_image_tk = ImageTk.PhotoImage(self.logo_base_image)
+            else:
+                # Image file was deleted — clear cached logo
+                self.logo_base_image = None
+                self.logo_image_tk = None
+                self.logo_image_path = None
+                self.logo_image_mtime = None
+                return
 
             if self.logo_image_tk is not None:
                 image_w, image_h = target_size
 
-                logo_center_x = self.us(8) + (image_w / 2)
-                logo_center_y = height + self.us(70) - (image_h / 2)
+                logo_center_x = image_w / 2
+                logo_center_y = height + self.us(60) - (image_h / 2)
 
                 self.canvas.create_image(
                     logo_center_x,
