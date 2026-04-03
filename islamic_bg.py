@@ -1386,7 +1386,7 @@ class IslamicBackground:
 
         if location_part:
             loc_y = top_y + self.us(50, 25)
-            loc_font = ('Arial', self.fs(22, 11), 'bold')
+            loc_font = ('Arial', self.fs(30, 15), 'bold')
             loc_text = location_part.upper()
 
             # Measure location text width for decorative lines
@@ -3007,11 +3007,11 @@ class IslamicBackground:
             )
             self.iqamah_overlay_ids.append(top_left_time)
 
-            line1_y = height * 0.17
-            countdown_y = line1_y + self.us(165, 92)
-            notice_y = countdown_y + self.us(190, 105)
+            line1_y = height * 0.10
+            countdown_y = line1_y + self.us(145, 80)
+            change_notice_y = countdown_y + self.us(175, 95)
+            notice_y = change_notice_y + self.us(90, 50)
             icon_y = notice_y + self.us(200, 112)
-            change_notice_y = icon_y + self.us(230, 125)
             is_friday_khutbah = (self.current_prayer_name == 'Jummah' and self.get_current_date().weekday() == 4)
             prayer_line_text = f"{self.current_prayer_name.upper()} iqamah in"
             instruction_line_text = 'Please put your cell phone on silent mode'
@@ -3048,6 +3048,42 @@ class IslamicBackground:
             )
             self.iqamah_overlay_ids.append(countdown_text)
 
+            # Iqamah change notice (between countdown and phone notice)
+            if iqamah_change_notice:
+                prayer_display = self.current_prayer_name or ''
+                left_text = f'{prayer_display} iqamah changes to '
+                right_text = f'{iqamah_change_notice} TOMORROW'
+                notice_font = ('Arial', self.fs(52, 24), 'bold')
+                outline_px = self.us(3, 2)
+
+                change_notice_left = self.draw_outlined_text(
+                    width / 2, change_notice_y,
+                    text=left_text + right_text,
+                    font=notice_font,
+                    fill='#2E7D32',
+                    outline='white',
+                    outline_px=outline_px,
+                    tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
+                )
+                self.iqamah_overlay_ids.append(change_notice_left)
+
+                # Overlay the right portion in red on top
+                left_width = tkfont.Font(font=notice_font).measure(left_text)
+                right_width = tkfont.Font(font=notice_font).measure(right_text)
+                total_width = left_width + right_width
+                right_x = (width / 2) + (total_width / 2) - right_width
+
+                change_notice_right = self.draw_outlined_text(
+                    right_x + right_width / 2, change_notice_y,
+                    text=right_text,
+                    font=notice_font,
+                    fill='#d32f2f',
+                    outline='white',
+                    outline_px=outline_px,
+                    tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
+                )
+                self.iqamah_overlay_ids.append(change_notice_right)
+
             # Cell phone notice (black and bigger)
             instruction_text = self.canvas.create_text(
                 width / 2, notice_y,
@@ -3060,37 +3096,6 @@ class IslamicBackground:
 
             # Larger centered no-phone icon beneath the notice
             icon_ids = self.draw_no_phone_icon(width / 2, icon_y, size=self.us(240, 130), tags='iqamah_overlay')
-            self.iqamah_overlay_ids.extend(icon_ids)
-
-            if iqamah_change_notice:
-                left_text = 'IQAMAH CHANGES TO '
-                right_text = f'{iqamah_change_notice} TOMORROW'
-                notice_font = ('Arial', self.fs(52, 24), 'bold')
-
-                left_width = tkfont.Font(font=notice_font).measure(left_text)
-                right_width = tkfont.Font(font=notice_font).measure(right_text)
-                total_width = left_width + right_width
-                left_x = (width / 2) - (total_width / 2)
-
-                change_notice_left = self.canvas.create_text(
-                    left_x, change_notice_y,
-                    text=left_text,
-                    font=notice_font,
-                    fill='#2E7D32',
-                    anchor='w',
-                    tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
-                )
-                self.iqamah_overlay_ids.append(change_notice_left)
-
-                change_notice_right = self.canvas.create_text(
-                    left_x + left_width, change_notice_y,
-                    text=right_text,
-                    font=notice_font,
-                    fill='#d32f2f',
-                    anchor='w',
-                    tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
-                )
-                self.iqamah_overlay_ids.append(change_notice_right)
             
             # Raise overlay to top of canvas stacking order
             self.canvas.tag_raise('iqamah_overlay')
@@ -3509,9 +3514,6 @@ class IslamicBackground:
         masjid_name = self.config.get('masjid_name', 'MASJID')
         address = self.config.get('location', 'Address')
 
-        # Draw logo in top-right corner
-        self.draw_top_right_logo(width, height)
-        
         # Draw masjid name below the ayah and translation
         self.draw_outlined_text(
             width / 2, self.us(185),
@@ -3525,7 +3527,7 @@ class IslamicBackground:
         if not getattr(self, 'show_logo', False):
             return
         try:
-            target_size = (self.us(300), self.us(200))
+            target_size = (self.us(520), self.us(340))
             images_dir = Path(__file__).parent / 'images'
             primary_path = images_dir / 'main.png'
             fallback_path = images_dir / 'main.jpg'
@@ -3542,24 +3544,14 @@ class IslamicBackground:
                     self.logo_image_tk = ImageTk.PhotoImage(self.logo_base_image)
 
             if self.logo_image_tk is not None:
-                left_image_x = self.us(24)
-                image_y = self.us(18)
                 image_w, image_h = target_size
 
-                left_center_x = left_image_x + (image_w / 2)
-                left_center_y = image_y + (image_h / 2)
-                right_center_x = width - self.us(24) - (image_w / 2)
-                right_center_y = image_y + (image_h / 2)
+                logo_center_x = self.us(8) + (image_w / 2)
+                logo_center_y = height + self.us(70) - (image_h / 2)
 
                 self.canvas.create_image(
-                    left_center_x,
-                    left_center_y,
-                    image=self.logo_image_tk,
-                    anchor='center'
-                )
-                self.canvas.create_image(
-                    right_center_x,
-                    right_center_y,
+                    logo_center_x,
+                    logo_center_y,
                     image=self.logo_image_tk,
                     anchor='center'
                 )
@@ -3570,22 +3562,10 @@ class IslamicBackground:
                         (font_name for font_name in calligraphy_candidates if font_name in tkfont.families()),
                         'Arial'
                     )
-                    text_y = image_y + image_h + self.us(18, 8)
-                    left_text_x = left_center_x
-                    right_text_x = right_center_x
+                    text_y = logo_center_y + (image_h / 2) + self.us(18, 8)
 
                     self.draw_outlined_text(
-                        left_text_x,
-                        text_y,
-                        text='Ramadhan Mubarak',
-                        font=(calligraphy_font, self.fs(20, 10), 'bold'),
-                        fill='#d4af37',
-                        outline='black',
-                        outline_px=self.us(2, 1),
-                        anchor='center'
-                    )
-                    self.draw_outlined_text(
-                        right_text_x,
+                        logo_center_x,
                         text_y,
                         text='Ramadhan Mubarak',
                         font=(calligraphy_font, self.fs(20, 10), 'bold'),
@@ -4217,6 +4197,9 @@ class IslamicBackground:
 
             self.draw_current_time_display(current_time_x, current_time_y, next_prayer_name_for_display)
 
+        # Draw logo after ribbons so it appears on top
+        self.draw_top_right_logo(width, height)
+
         if self.is_eid_day(self.get_current_date()):
             self.canvas.delete('animated_eid')
             self.draw_eid_fireworks(width, height, animated=True, tags='animated_eid')
@@ -4461,33 +4444,26 @@ class IslamicBackground:
         if show_tomorrow_iqamah and tomorrow_iqamah:
             ribbon_state = 'normal' if self.ribbon_visible else 'hidden'
 
-            notice_pad = self.us(8, 4)
+            notice_pad = self.us(4, 2)
             notice_x1 = x + notice_pad
             notice_y1 = y + notice_pad
-            notice_x2 = x + width - notice_pad
-            notice_y2 = y + height - notice_pad
+            notice_w = width - notice_pad * 2
+            notice_h = height - notice_pad * 2
 
-            # Full notice background covering prayer-box content area
-            self.canvas.create_rectangle(
-                notice_x1, notice_y1, notice_x2, notice_y2,
-                fill='white',
-                outline='',
-                tags=('prayer_change_ribbon',),
-                state=ribbon_state
+            # Full notice background with rounded corners matching prayer box
+            notice_bg = self.draw_alpha_fill(
+                notice_x1, notice_y1, notice_w, notice_h,
+                fill_color='white',
+                opacity_percent=97,
+                radius=corner_radius,
+                outline_color='#ff0000',
+                outline_width=self.us(3, 2)
             )
-
-            # Red bordered card
-            self.canvas.create_rectangle(
-                notice_x1, notice_y1, notice_x2, notice_y2,
-                fill='',
-                outline='#ff0000',
-                width=self.us(2, 1),
-                tags=('prayer_change_ribbon',),
-                state=ribbon_state
-            )
+            self.canvas.itemconfigure(notice_bg, state=ribbon_state, tags=('prayer_change_ribbon',))
 
             center_x = x + (width / 2)
-            line1_y = y + (height * 0.26)
+            line1_y = y + (height * 0.18)
+            iqamah_label_y = y + (height * 0.36)
             line2_y = y + (height * 0.56)
             line3_y = y + (height * 0.82)
 
@@ -4497,6 +4473,16 @@ class IslamicBackground:
                 text=name.upper(),
                 font=('Arial', self.fs(46, 23), 'bold'),
                 fill='black',
+                tags=('prayer_change_ribbon',),
+                state=ribbon_state
+            )
+
+            # Line 1b: "Iqamah" label
+            self.canvas.create_text(
+                center_x, iqamah_label_y,
+                text='Iqamah',
+                font=('Arial', self.fs(30, 15), 'bold'),
+                fill='#2E7D32',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
             )
@@ -5063,15 +5049,15 @@ class IslamicBackground:
         )
 
     def draw_build_info(self, width, height):
-        """Draw app build date/time in the bottom-left corner."""
+        """Draw app build date/time in the bottom-right corner."""
         palette = self.get_theme_palette()
         self.build_info_text_id = self.canvas.create_text(
-            self.us(14, 8),
+            width - self.us(14, 8),
             height - self.us(20, 12),
             text=self.build_info_text,
             font=('Arial', self.fs(18, 10)),
             fill=palette['build_info_text'],
-            anchor='sw'
+            anchor='se'
         )
     
     def schedule_prayer_time_toggle(self):
