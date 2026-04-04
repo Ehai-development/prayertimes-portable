@@ -1261,12 +1261,35 @@ class IslamicBackground:
         return Path(__file__).resolve().parent / 'config'
 
     def get_background_image_path(self):
-        """Resolve background image path. Rotates daily through images/background/ folder if it exists."""
-        app_dir = Path(__file__).resolve().parent
-        bg_folder = app_dir / 'images' / 'background'
-        
-        # Daily rotation from images/background/ folder (shuffle-based)
+        """Resolve background image path. Rotates daily through images/background/ folder.
+        Uses a shuffle-cycle so every image is shown once before any repeats."""
+        bg_folder = Path(__file__).resolve().parent / 'images' / 'background'
+        # Prefer external images folder (next to exe or cwd) for frozen builds
+        if getattr(sys, 'frozen', False):
+            ext_bg = Path(sys.executable).resolve().parent.parent / 'images' / 'background'
+            if not ext_bg.is_dir():
+                ext_bg = Path(sys.executable).resolve().parent / 'images' / 'background'
+            if ext_bg.is_dir():
+                bg_folder = ext_bg
+        else:
+            cwd_bg = Path.cwd() / 'images' / 'background'
+            if cwd_bg.is_dir():
+                bg_folder = cwd_bg
+
         if bg_folder.is_dir():
+            # Check for manual override (only on the specified date)
+            override = str(self.config.get('background_override', '')).strip()
+            override_date = str(self.config.get('background_override_date', '')).strip()
+            if override:
+                use_override = True
+                if override_date:
+                    today_str = self.get_current_date().strftime('%Y-%m-%d')
+                    use_override = (today_str == override_date)
+                if use_override:
+                    override_path = bg_folder / override
+                    if override_path.is_file():
+                        return override_path.resolve()
+
             bg_images = sorted([
                 f for f in bg_folder.iterdir()
                 if f.is_file() and f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
@@ -3528,7 +3551,7 @@ class IslamicBackground:
         if not getattr(self, 'show_logo', False):
             return
         try:
-            target_size = (self.us(370), self.us(245))
+            target_size = (self.us(420), self.us(280))
             # Resolve images dir: prefer folder next to exe (frozen) or cwd, then source dir
             images_dir = None
             if getattr(sys, 'frozen', False):

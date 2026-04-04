@@ -11,6 +11,8 @@
   "theme": "elegent",
   "layout_style": "moon",
   "background_image": "images/back.png",
+  "background_override": "Mukarram Masjid - Bangladesh.png",
+  "background_override_date": "2026-04-04",
   "ticker_enabled": "yes",
   "ticker_speed": 5,
   "athancalloutduran": 25,
