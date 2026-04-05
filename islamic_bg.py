@@ -3551,7 +3551,9 @@ class IslamicBackground:
         if not getattr(self, 'show_logo', False):
             return
         try:
-            target_size = (self.us(420), self.us(280))
+            logo_w = int(self.config.get('logo_width', 420))
+            logo_h = int(self.config.get('logo_height', 280))
+            target_size = (self.us(logo_w), self.us(logo_h))
             # Resolve images dir: prefer folder next to exe (frozen) or cwd, then source dir
             images_dir = None
             if getattr(sys, 'frozen', False):
@@ -3594,7 +3596,7 @@ class IslamicBackground:
                 image_w, image_h = target_size
 
                 logo_center_x = image_w / 2
-                logo_center_y = height + self.us(60) - (image_h / 2)
+                logo_center_y = height + self.us(90) - (image_h / 2)
 
                 self.canvas.create_image(
                     logo_center_x,

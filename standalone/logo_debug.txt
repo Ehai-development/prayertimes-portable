@@ -1,0 +1,5 @@
+config_dir=C:\AI\prayertime\portable\config
+logo_width=600
+logo_height=400
+logo_w=600, logo_h=400
+target_size=(469, 313)

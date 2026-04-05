@@ -23,6 +23,8 @@
   "prayernow": 3,
   "showlogs": "no",
   "showlogo": "yes",
+  "logo_width": 600,
+  "logo_height": 400,
   "hidenewstape": 30,
   "countandprayeropacity": 50,
   "announcementbgcolor": "#0a1128",
