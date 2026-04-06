@@ -1260,9 +1260,29 @@ class IslamicBackground:
 
         return Path(__file__).resolve().parent / 'config'
 
+    def _load_background_log(self):
+        """Load the background image log from config/background_log.json."""
+        log_path = self.get_config_dir() / 'background_log.json'
+        try:
+            if log_path.exists():
+                with open(log_path, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+        except Exception as e:
+            self._log(f"Error loading background log: {e}")
+        return {"shown": {}}
+
+    def _save_background_log(self, log_data):
+        """Save the background image log to config/background_log.json."""
+        log_path = self.get_config_dir() / 'background_log.json'
+        try:
+            with open(log_path, 'w', encoding='utf-8') as f:
+                json.dump(log_data, f, indent=2)
+        except Exception as e:
+            self._log(f"Error saving background log: {e}")
+
     def get_background_image_path(self):
-        """Resolve background image path. Rotates daily through images/background/ folder.
-        Uses a shuffle-cycle so every image is shown once before any repeats."""
+        """Resolve background image path. Picks one image per day using a persistent log.
+        Every image is shown once before any repeats. Log resets when all shown."""
         bg_folder = Path(__file__).resolve().parent / 'images' / 'background'
         # Prefer external images folder (next to exe or cwd) for frozen builds
         if getattr(sys, 'frozen', False):
@@ -1295,19 +1315,37 @@ class IslamicBackground:
                 if f.is_file() and f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp', '.gif')
             ])
             if bg_images:
-                n = len(bg_images)
-                day_of_year = self.get_current_date().timetuple().tm_yday
-                # Which cycle (group of n days) and position within that cycle
-                cycle = day_of_year // n
-                pos = day_of_year % n
-                # Shuffle with a seed based on year + cycle so each cycle
-                # shows all images in a different random order
-                year = self.get_current_date().year
-                rng = random.Random(year * 1000 + cycle)
-                indices = list(range(n))
-                rng.shuffle(indices)
-                chosen = bg_images[indices[pos]]
-                return chosen.resolve()
+                today_str = self.get_current_date().strftime('%Y-%m-%d')
+                log_data = self._load_background_log()
+                shown = log_data.get("shown", {})
+
+                # If today already has an entry, return that image
+                for img_name, date_shown in shown.items():
+                    if date_shown == today_str:
+                        match = next((f for f in bg_images if f.name == img_name), None)
+                        if match:
+                            return match.resolve()
+
+                # Find images not yet shown in this cycle
+                all_names = {f.name for f in bg_images}
+                shown_names = set(shown.keys())
+                remaining = all_names - shown_names
+
+                # All shown — reset log and start fresh
+                if not remaining:
+                    shown = {}
+                    remaining = all_names
+
+                # Pick a random image from remaining
+                chosen_name = random.choice(sorted(remaining))
+                chosen_path = next(f for f in bg_images if f.name == chosen_name)
+
+                # Log it
+                shown[chosen_name] = today_str
+                log_data["shown"] = shown
+                self._save_background_log(log_data)
+
+                return chosen_path.resolve()
 
         # Fallback to configured background_image setting
         image_setting = str(self.config.get('background_image', '')).strip()
@@ -3680,6 +3718,8 @@ class IslamicBackground:
             text=day_name,
             font=('Arial', self.fs(34, 15), 'bold'),
             fill='white',
+            outline='black',
+            outline_px=self.us(3, 2),
             anchor='center'
         )
         
@@ -3689,6 +3729,8 @@ class IslamicBackground:
             text=date_str,
             font=('Arial', self.fs(22, 11)),
             fill='white',
+            outline='black',
+            outline_px=self.us(3, 2),
             anchor='center'
         )
         
@@ -3698,6 +3740,8 @@ class IslamicBackground:
             text=hijri_str,
             font=('Arial', self.fs(22, 11)),
             fill='white',
+            outline='black',
+            outline_px=self.us(3, 2),
             anchor='center'
         )
     
@@ -5089,11 +5133,13 @@ class IslamicBackground:
 
         date_font = ('Arial', self.fs(42, 24), 'bold') if show_arabic_name else ('Arial', self.fs(36, 20), 'bold')
 
-        self.canvas.create_text(
+        self.draw_outlined_text(
             x, date_block_y,
             text=f"{day_text} | {hijri_text} | {miladi_text}",
             font=date_font,
             fill='white',
+            outline='black',
+            outline_px=self.us(3, 2),
             anchor='n'
         )
 
