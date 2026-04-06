@@ -157,6 +157,11 @@ class IslamicBackground:
         self.eid_balloon_cycle_seconds = 9.5
         self.eid_animation_tick_ms = 220
 
+        # Current prayer glow animation
+        self.glow_tick_ms = 80
+        self.glow_cycle_seconds = 2.0
+        self._glow_phase = 0.0  # 0..1 oscillating
+
         self.logo_base_image = None
         self.logo_image_path = None
         self.logo_image_mtime = None
@@ -290,6 +295,7 @@ class IslamicBackground:
             self.root.after(self.lantern_pulse_tick_ms, self.schedule_lantern_pulse_animation)
             self.root.after(self.star_twinkle_tick_ms, self.schedule_star_twinkle_animation)
             self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
+            self.root.after(self.glow_tick_ms, self.schedule_glow_animation)
             if self.show_weather:
                 self.root.after(500, self._start_weather_fetch)
         except Exception as e:
@@ -540,6 +546,41 @@ class IslamicBackground:
         finally:
             try:
                 self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
+            except:
+                pass
+
+    def schedule_glow_animation(self):
+        """Animate a pulsing glow on the current prayer box border."""
+        try:
+            import math
+            if not self.iqamah_overlay_visible and not self._is_full_redraw:
+                # Advance phase: 0→1→0 using sine wave
+                step = self.glow_tick_ms / 1000.0 / self.glow_cycle_seconds
+                self._glow_phase = (self._glow_phase + step) % 1.0
+                t = (math.sin(self._glow_phase * 2 * math.pi) + 1) / 2  # 0..1 smooth
+
+                # Update only the current prayer box with animated outline
+                current = self.last_rendered_current_prayer
+                if current and current in self.prayer_box_fill_ids:
+                    palette = self.get_theme_palette()
+                    # Pulse outline width between 2 and 6
+                    min_w = self.us(2, 1)
+                    max_w = self.us(7, 4)
+                    ow = min_w + t * (max_w - min_w)
+                    # Pulse outline alpha between 120 and 255
+                    outline_alpha = int(120 + t * 135)
+                    self.update_prayer_box_alpha_fill(
+                        current,
+                        palette['card_current_fill'],
+                        palette['card_current_outline'],
+                        ow,
+                        outline_alpha=outline_alpha
+                    )
+        except Exception as e:
+            self._log(f"ERROR in schedule_glow_animation: {e}")
+        finally:
+            try:
+                self.root.after(self.glow_tick_ms, self.schedule_glow_animation)
             except:
                 pass
 
@@ -4361,12 +4402,14 @@ class IslamicBackground:
             row_outline = palette['card_current_outline'] if is_current else ''
             row_x = table_x + self.us(14, 7)
             row_w = table_w - self.us(28, 14)
+
             row_fill_id = self.draw_alpha_fill(
                 row_x, y1, row_w, row_h,
                 fill_color=row_fill,
                 opacity_percent=self.prayer_box_opacity_percent,
                 radius=0
             )
+            outline_width = self.us(2, 1)
             row_shape_id = self.canvas.create_rectangle(
                 row_x,
                 y1,
@@ -4374,7 +4417,7 @@ class IslamicBackground:
                 y2,
                 fill='',
                 outline=row_outline,
-                width=self.us(2, 1)
+                width=outline_width
             )
             self.canvas.tag_lower(row_fill_id, row_shape_id)
             self.prayer_box_fill_ids[key] = row_fill_id
@@ -4617,7 +4660,7 @@ class IslamicBackground:
                     else:
                         self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'], palette['card_outline'], 3)
                 elif prayer_key == current_prayer:
-                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'], palette['card_current_outline'], 4)
+                    pass  # Glow animation handles current prayer
                 else:
                     self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'], palette['card_outline'], 3)
             except:
@@ -4690,7 +4733,7 @@ class IslamicBackground:
         self._alpha_image_refs[image_id] = photo
         return image_id
 
-    def update_prayer_box_alpha_fill(self, prayer_key, fill_color, outline_color=None, outline_width=0):
+    def update_prayer_box_alpha_fill(self, prayer_key, fill_color, outline_color=None, outline_width=0, outline_alpha=255):
         """Update alpha fill+outline image in-place for a prayer box (no z-order change)."""
         style = self.prayer_box_fill_styles.get(prayer_key)
         if not style:
@@ -4718,7 +4761,8 @@ class IslamicBackground:
         if outline_color and outline_width > 0:
             or_, og, ob = self._color_to_rgb(outline_color)
             ow = max(1, int(round(outline_width)))
-            outline_rgba = (or_, og, ob, 255)
+            oa = max(0, min(255, int(outline_alpha)))
+            outline_rgba = (or_, og, ob, oa)
             if rad > 0:
                 draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=rad, fill=None, outline=outline_rgba, width=ow)
             else:
