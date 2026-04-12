@@ -2569,6 +2569,11 @@ class IslamicBackground:
         # Find next prayer based on current time
         for prayer_name, athan_time in prayer_schedule:
             if athan_time and current_time < athan_time:
+                # For Shrouq, add shrouqplus minutes so countdown targets end of sunrise period
+                if prayer_name == 'Shrouq':
+                    shrouq_plus = int(self.config.get('shrouqplus', 10))
+                    shrouq_dt = datetime.combine(self.get_current_date(), athan_time) + timedelta(minutes=shrouq_plus)
+                    athan_time = shrouq_dt.time()
                 return prayer_name, athan_time
 
         # If no prayer found, next is Fajr (tomorrow)
