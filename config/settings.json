@@ -29,6 +29,7 @@
   "countandprayeropacity": 50,
   "announcementbgcolor": "#0a1128",
   "showweather": "yes",
+  "overwritebglog": "no",
   "prayerboxopacity": 75,
   "testing": {
     "enabled": false,

@@ -1158,6 +1158,7 @@ class IslamicBackground:
                 "location": "MASJID AL-SALAM",
                 "prayernow": 3,
                 "shrouqplus": 10,
+                "overwritebglog": "no",
                 "theme": "moon",
                 "arabicchangeevery": 30,
                 "arabicnameduration": 5
@@ -1313,9 +1314,26 @@ class IslamicBackground:
         return {"shown": {}}
 
     def _save_background_log(self, log_data):
-        """Save the background image log to config/background_log.json."""
+        """Save the background image log to config/background_log.json.
+        When overwritebglog is 'no', merge new entries with existing local log
+        instead of overwriting, protecting against remote/bundled overwrites."""
         log_path = self.get_config_dir() / 'background_log.json'
         try:
+            overwrite = str(self.config.get('overwritebglog', 'no')).strip().lower()
+            if overwrite == 'no' and log_path.exists():
+                # Merge: keep existing entries, add/update new ones
+                try:
+                    with open(log_path, 'r', encoding='utf-8') as f:
+                        existing = json.load(f)
+                    existing_shown = existing.get('shown', {})
+                    new_shown = log_data.get('shown', {})
+                    # If new log has fewer entries (e.g. reset cycle), use new log
+                    if len(new_shown) >= len(existing_shown):
+                        existing_shown.update(new_shown)
+                        log_data['shown'] = existing_shown
+                    # else: full reset intended, use new_shown as-is
+                except:
+                    pass
             with open(log_path, 'w', encoding='utf-8') as f:
                 json.dump(log_data, f, indent=2)
         except Exception as e:
