@@ -2072,8 +2072,21 @@ class IslamicBackground:
     
     def load_prayer_times(self):
         """Load prayer times from base CSV and override Ramadan dates with Ramadan 2026 timings"""
-        base_csv_path = Path(__file__).parent / 'data' / self.config.get('data_file', 'prayer_times.csv')
-        ramadan_csv_path = Path(__file__).parent / 'data' / 'Ramadan-prayer-timings-2026.csv'
+        # Resolve data directory: prefer external data/ folder (next to exe or cwd) over bundled
+        data_dir = Path(__file__).parent / 'data'
+        if getattr(sys, 'frozen', False):
+            ext_data = Path(sys.executable).resolve().parent.parent / 'data'
+            if not ext_data.is_dir():
+                ext_data = Path(sys.executable).resolve().parent / 'data'
+            if ext_data.is_dir():
+                data_dir = ext_data
+        else:
+            cwd_data = Path.cwd() / 'data'
+            if cwd_data.is_dir():
+                data_dir = cwd_data
+
+        base_csv_path = data_dir / self.config.get('data_file', 'prayer_times.csv')
+        ramadan_csv_path = data_dir / 'Ramadan-prayer-timings-2026.csv'
 
         self.prayer_data = {}
 
