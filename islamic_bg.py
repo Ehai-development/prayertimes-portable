@@ -3974,90 +3974,101 @@ class IslamicBackground:
             pass
 
     def draw_weather(self, width, height):
-        """Draw current temperature and forecast in top-left, cycling between them."""
+        """Draw weather as 3 compact rows: Now, tomorrow, day after tomorrow."""
         if not self.weather_data:
             return
 
         x_start = self.us(20, 10)
         y_start = self.us(100, 50)
-        padding = self.us(12, 6)
-        panel_w = self.us(340, 180)
+        row_h = self.us(50, 25)
+        row_w = self.us(310, 155)
+        row_gap = self.us(4, 2)
+        padding_x = self.us(14, 7)
+        corner_r = self.us(10, 5)
 
-        # Current temperature group
-        temp_text = f"{self.weather_data['current_temp']}°C"
-        icon_text = self.weather_data['current_icon']
+        # Icon color mapping
+        icon_colors = {
+            '☀': '#FFD700',   # gold / sun
+            '⛅': '#FFB347',   # orange / partly cloudy
+            '☁': '#B0C4DE',   # light steel blue / cloudy
+            '🌫': '#A9A9A9',   # grey / fog
+            '🌧': '#6CB4EE',   # light blue / rain
+            '❄': '#E0FFFF',    # ice blue / snow
+            '⛈': '#DA70D6',   # orchid / thunderstorm
+        }
 
-        curr_x = x_start + padding
-        curr_y = y_start + padding
+        # Build row data: (label, icon, temp_text)
+        rows = []
+        rows.append(('Now', self.weather_data['current_icon'],
+                      f"{self.weather_data['current_temp']}°C"))
 
-        icon_size = self.fs(36, 18)
-        self.canvas.create_text(
-            curr_x, curr_y,
-            text=icon_text,
-            font=('Segoe UI Emoji', icon_size),
-            fill='white',
-            anchor='nw',
-            tags='weather_current'
-        )
-
-        temp_size = self.fs(48, 24)
-        self.canvas.create_text(
-            curr_x + self.us(70, 36), curr_y,
-            text=temp_text,
-            font=('Arial', temp_size, 'bold'),
-            fill='#ffffff',
-            anchor='nw',
-            tags='weather_current'
-        )
-
-        # Forecast group (same position, initially hidden)
         forecast = self.weather_data.get('forecast', [])
-        if forecast:
-            forecast_y = y_start + padding
-            col_width = (panel_w - 2 * padding) / len(forecast)
-            forecast_font = self.fs(30, 15)
-            icon_font = self.fs(28, 14)
+        for day in forecast[:2]:
+            rows.append((day['day'], day['icon'],
+                          f"{day['high']}° / {day['low']}°"))
 
-            for i, day in enumerate(forecast):
-                cx = x_start + padding + col_width * i + col_width / 2
+        # Keep references to prevent garbage collection
+        if not hasattr(self, '_weather_row_images'):
+            self._weather_row_images = []
+        self._weather_row_images.clear()
 
-                self.canvas.create_text(
-                    cx, forecast_y,
-                    text=day['day'],
-                    font=('Arial', forecast_font, 'bold'),
-                    fill='#c0d0e8',
-                    anchor='n',
-                    tags='weather_forecast'
+        label_font = self.fs(24, 12)
+        icon_font = self.fs(26, 13)
+        temp_font = self.fs(32, 16)
+
+        for i, (label, icon, temp_text) in enumerate(rows):
+            ry = y_start + i * (row_h + row_gap)
+
+            # Semi-transparent rounded row background
+            try:
+                bg_img = Image.new('RGBA', (row_w, row_h), (0, 0, 0, 0))
+                draw = ImageDraw.Draw(bg_img)
+                r = corner_r
+                # "Now" row slightly brighter, forecast rows darker
+                bg_color = (20, 40, 70, 160) if i == 0 else (10, 20, 40, 140)
+                draw.rounded_rectangle(
+                    [(0, 0), (row_w - 1, row_h - 1)],
+                    radius=r, fill=bg_color
                 )
-
-                self.canvas.create_text(
-                    cx, forecast_y + self.us(44, 22),
-                    text=day['icon'],
-                    font=('Segoe UI Emoji', icon_font),
-                    fill='white',
-                    anchor='n',
-                    tags='weather_forecast'
+                tk_img = ImageTk.PhotoImage(bg_img)
+                self._weather_row_images.append(tk_img)
+                self.canvas.create_image(
+                    x_start, ry, image=tk_img, anchor='nw',
+                    tags='weather_row'
                 )
+            except Exception:
+                pass
 
-                self.canvas.create_text(
-                    cx, forecast_y + self.us(96, 48),
-                    text=f"{day['high']}° / {day['low']}°",
-                    font=('Arial', self.fs(30, 15), 'bold'),
-                    fill='#8aadcc',
-                    anchor='n',
-                    tags='weather_forecast'
-                )
+            # Day label (left-aligned)
+            self.canvas.create_text(
+                x_start + padding_x, ry + row_h // 2,
+                text=label,
+                font=('Arial', label_font, 'bold'),
+                fill='#e0e8f0' if i == 0 else '#a0b8d0',
+                anchor='w',
+                tags='weather_row'
+            )
 
-        # Set initial visibility based on current state
-        if self._weather_show_forecast:
-            self._set_weather_group_state('weather_current', 'hidden')
-            self._set_weather_group_state('weather_forecast', 'normal')
-        else:
-            self._set_weather_group_state('weather_current', 'normal')
-            self._set_weather_group_state('weather_forecast', 'hidden')
+            # Weather icon (center area) — colored per icon type
+            icon_color = icon_colors.get(icon, '#ffffff')
+            self.canvas.create_text(
+                x_start + self.us(100, 50), ry + row_h // 2,
+                text=icon,
+                font=('Segoe UI Emoji', icon_font),
+                fill=icon_color,
+                anchor='w',
+                tags='weather_row'
+            )
 
-        # Start cycle timer
-        self._start_weather_cycle()
+            # Temperature (right-aligned)
+            self.canvas.create_text(
+                x_start + row_w - padding_x, ry + row_h // 2,
+                text=temp_text,
+                font=('Arial', temp_font, 'bold'),
+                fill='#ffffff' if i == 0 else '#c0d8e8',
+                anchor='e',
+                tags='weather_row'
+            )
 
     def _set_weather_group_state(self, tag, state):
         """Set all canvas items with given tag to state ('normal' or 'hidden')."""
@@ -4065,52 +4076,20 @@ class IslamicBackground:
             self.canvas.itemconfig(item_id, state=state)
 
     def _start_weather_cycle(self):
-        """Start the weather display cycle timer."""
-        if self._weather_cycle_after_id:
-            try:
-                self.root.after_cancel(self._weather_cycle_after_id)
-            except:
-                pass
-        # Current temp shows for 15s, forecast for 5s
-        delay = 5000 if self._weather_show_forecast else 15000
-        self._weather_cycle_after_id = self.root.after(delay, self._weather_cycle_step)
+        """No-op: weather rows are always visible now."""
+        pass
 
     def _weather_cycle_step(self):
-        """Fade out current weather group, fade in next."""
-        try:
-            self._weather_fade_out(step=0)
-        except:
-            pass
+        """No-op: weather rows are always visible now."""
+        pass
 
     def _weather_fade_out(self, step=0):
-        """Fade out the currently visible group over several steps."""
-        total_steps = 6
-        if step < total_steps:
-            # Gradually reduce visibility isn't possible with state alone,
-            # so we do a quick hide after a short delay for a clean transition
-            self.root.after(40, lambda: self._weather_fade_out(step + 1))
-            return
-
-        # Switch groups
-        if self._weather_show_forecast:
-            self._set_weather_group_state('weather_forecast', 'hidden')
-            self._weather_show_forecast = False
-            self._weather_fade_in('weather_current', step=0)
-        else:
-            self._set_weather_group_state('weather_current', 'hidden')
-            self._weather_show_forecast = True
-            self._weather_fade_in('weather_forecast', step=0)
+        """No-op: weather rows are always visible now."""
+        pass
 
     def _weather_fade_in(self, tag, step=0):
-        """Fade in the new weather group."""
-        total_steps = 6
-        if step == 0:
-            self._set_weather_group_state(tag, 'normal')
-        if step < total_steps:
-            self.root.after(40, lambda: self._weather_fade_in(tag, step + 1))
-            return
-        # Restart cycle
-        self._start_weather_cycle()
+        """No-op: weather rows are always visible now."""
+        pass
 
     def draw_quran_verse(self, width, height):
         """Draw Quranic verse above prayer times with translation"""
