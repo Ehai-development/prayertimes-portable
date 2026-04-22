@@ -25,6 +25,7 @@
   "showlogo": "yes",
   "logo_width": 600,
   "logo_height": 400,
+  "logo_x_offset": -95,
   "hidenewstape": 30,
   "countandprayeropacity": 50,
   "announcementbgcolor": "#0a1128",

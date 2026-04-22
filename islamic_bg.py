@@ -159,7 +159,7 @@ class IslamicBackground:
 
         # Current prayer glow animation
         self.glow_tick_ms = 80
-        self.glow_cycle_seconds = 2.0
+        self.glow_cycle_seconds = 5.0
         self._glow_phase = 0.0  # 0..1 oscillating
 
         self.logo_base_image = None
@@ -550,31 +550,26 @@ class IslamicBackground:
                 pass
 
     def schedule_glow_animation(self):
-        """Animate a pulsing glow on the current prayer box border."""
+        """Animate a moving line around the current prayer box border."""
         try:
-            import math
             if not self.iqamah_overlay_visible and not self._is_full_redraw:
-                # Advance phase: 0→1→0 using sine wave
+                # Advance phase 0..1 for one full lap around the border.
                 step = self.glow_tick_ms / 1000.0 / self.glow_cycle_seconds
                 self._glow_phase = (self._glow_phase + step) % 1.0
-                t = (math.sin(self._glow_phase * 2 * math.pi) + 1) / 2  # 0..1 smooth
 
-                # Update only the current prayer box with animated outline
+                # Update only the current prayer box with animated moving outline segment.
                 current = self.last_rendered_current_prayer
                 if current and current in self.prayer_box_fill_ids:
                     palette = self.get_theme_palette()
-                    # Pulse outline width between 2 and 6
-                    min_w = self.us(2, 1)
-                    max_w = self.us(7, 4)
-                    ow = min_w + t * (max_w - min_w)
-                    # Pulse outline alpha between 120 and 255
-                    outline_alpha = int(120 + t * 135)
                     self.update_prayer_box_alpha_fill(
                         current,
                         palette['card_current_fill'],
                         palette['card_current_outline'],
-                        ow,
-                        outline_alpha=outline_alpha
+                        self.us(4, 2),
+                        outline_alpha=150,
+                        animated_line=True,
+                        line_phase=self._glow_phase,
+                        line_color=palette['card_current_outline']
                     )
         except Exception as e:
             self._log(f"ERROR in schedule_glow_animation: {e}")
@@ -3709,8 +3704,10 @@ class IslamicBackground:
 
             if self.logo_image_tk is not None:
                 image_w, image_h = target_size
+                logo_x_offset = int(self.config.get('logo_x_offset', -30))
+                scaled_logo_x_offset = int(round(logo_x_offset * self.ui_scale))
 
-                logo_center_x = image_w / 2
+                logo_center_x = (image_w / 2) + scaled_logo_x_offset
                 logo_center_y = height + self.us(90) - (image_h / 2)
 
                 self.canvas.create_image(
@@ -4748,7 +4745,8 @@ class IslamicBackground:
         self._alpha_image_refs[image_id] = photo
         return image_id
 
-    def update_prayer_box_alpha_fill(self, prayer_key, fill_color, outline_color=None, outline_width=0, outline_alpha=255):
+    def update_prayer_box_alpha_fill(self, prayer_key, fill_color, outline_color=None, outline_width=0, outline_alpha=255,
+                                     animated_line=False, line_phase=0.0, line_color=None):
         """Update alpha fill+outline image in-place for a prayer box (no z-order change)."""
         style = self.prayer_box_fill_styles.get(prayer_key)
         if not style:
@@ -4782,6 +4780,99 @@ class IslamicBackground:
                 draw.rounded_rectangle((0, 0, w - 1, h - 1), radius=rad, fill=None, outline=outline_rgba, width=ow)
             else:
                 draw.rectangle((0, 0, w - 1, h - 1), fill=None, outline=outline_rgba, width=ow)
+
+        # Optional traveling highlight segment around border.
+        if animated_line:
+            lw = max(2, int(round(outline_width)))
+            seg_color = line_color or outline_color or '#ffffff'
+            sr, sg, sb = self._color_to_rgb(seg_color)
+            seg_rgba = (sr, sg, sb, 255)
+
+            if rad > 0:
+                # Rounded-rectangle perimeter path (clockwise), so the moving line hugs curved corners.
+                rr = max(1, min(rad, (w - 1) // 2, (h - 1) // 2))
+                top_len = max(0.0, float(w - 2 * rr - 1))
+                side_len = max(0.0, float(h - 2 * rr - 1))
+                arc_q = (math.pi * rr) / 2.0
+                perim = max(1.0, (2.0 * top_len) + (2.0 * side_len) + (4.0 * arc_q))
+                seg_len = max(12.0, perim * 0.22)
+                start = (line_phase % 1.0) * perim
+
+                cx_tr, cy_tr = (w - rr - 1), rr
+                cx_br, cy_br = (w - rr - 1), (h - rr - 1)
+                cx_bl, cy_bl = rr, (h - rr - 1)
+                cx_tl, cy_tl = rr, rr
+
+                def rounded_perimeter_point(dist):
+                    d = dist % perim
+
+                    if d <= top_len:
+                        return (rr + d, 0)
+                    d -= top_len
+
+                    if d <= arc_q:
+                        theta = (-math.pi / 2.0) + (d / rr)
+                        return (cx_tr + (rr * math.cos(theta)), cy_tr + (rr * math.sin(theta)))
+                    d -= arc_q
+
+                    if d <= side_len:
+                        return (w - 1, rr + d)
+                    d -= side_len
+
+                    if d <= arc_q:
+                        theta = d / rr
+                        return (cx_br + (rr * math.cos(theta)), cy_br + (rr * math.sin(theta)))
+                    d -= arc_q
+
+                    if d <= top_len:
+                        return ((w - rr - 1) - d, h - 1)
+                    d -= top_len
+
+                    if d <= arc_q:
+                        theta = (math.pi / 2.0) + (d / rr)
+                        return (cx_bl + (rr * math.cos(theta)), cy_bl + (rr * math.sin(theta)))
+                    d -= arc_q
+
+                    if d <= side_len:
+                        return (0, (h - rr - 1) - d)
+                    d -= side_len
+
+                    theta = math.pi + (d / rr)
+                    return (cx_tl + (rr * math.cos(theta)), cy_tl + (rr * math.sin(theta)))
+
+                pts = []
+                step_px = 2.0
+                sample_count = int(seg_len / step_px) + 1
+                for i in range(sample_count + 1):
+                    px, py = rounded_perimeter_point(start + (i * step_px))
+                    pts.append((int(round(px)), int(round(py))))
+                if len(pts) >= 2:
+                    draw.line(pts, fill=seg_rgba, width=lw, joint='curve')
+            else:
+                # Non-rounded fallback.
+                perim = max(4, (2 * (w + h) - 4))
+                seg_len = max(10, int(perim * 0.22))
+                start = int((line_phase % 1.0) * perim)
+
+                def perimeter_point(dist):
+                    d = dist % perim
+                    if d < w:
+                        return (d, 0)
+                    d -= w
+                    if d < h - 1:
+                        return (w - 1, d + 1)
+                    d -= (h - 1)
+                    if d < w - 1:
+                        return (w - 2 - d, h - 1)
+                    d -= (w - 1)
+                    return (0, h - 2 - d)
+
+                pts = []
+                step_px = 2
+                for off in range(0, seg_len + 1, step_px):
+                    pts.append(perimeter_point(start + off))
+                if len(pts) >= 2:
+                    draw.line(pts, fill=seg_rgba, width=lw, joint='curve')
 
         # Update the existing canvas image in-place (preserves z-order)
         new_photo = ImageTk.PhotoImage(img)
