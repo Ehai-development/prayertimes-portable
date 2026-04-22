@@ -550,26 +550,43 @@ class IslamicBackground:
                 pass
 
     def schedule_glow_animation(self):
-        """Animate a moving line around the current prayer box border."""
+        """Pulse a glow on the current prayer box border every few seconds."""
         try:
             if not self.iqamah_overlay_visible and not self._is_full_redraw:
-                # Advance phase 0..1 for one full lap around the border.
+                # Advance phase 0..1 for a full pulse cycle.
                 step = self.glow_tick_ms / 1000.0 / self.glow_cycle_seconds
                 self._glow_phase = (self._glow_phase + step) % 1.0
 
-                # Update only the current prayer box with animated moving outline segment.
+                # Short pulse window inside each cycle.
+                pulse_window = 0.22
+                pulse = 0.0
+                if self._glow_phase < pulse_window:
+                    t = self._glow_phase / pulse_window
+                    pulse = math.sin(t * math.pi)
+
+                # Update only the current prayer box with a soft glow pulse.
                 current = self.last_rendered_current_prayer
                 if current and current in self.prayer_box_fill_ids:
                     palette = self.get_theme_palette()
+                    outline_width = self.us(4, 2) + int(round(self.us(2, 1) * pulse))
+                    outline_alpha = 150 + int(round(90 * pulse))
+                    glow_outline = self._mix_hex_color(
+                        palette['card_current_outline'],
+                        '#fff1a8',
+                        0.65 * pulse
+                    )
+                    glow_fill = self._mix_hex_color(
+                        palette['card_current_fill'],
+                        '#fff8d9',
+                        0.18 * pulse
+                    )
                     self.update_prayer_box_alpha_fill(
                         current,
-                        palette['card_current_fill'],
-                        palette['card_current_outline'],
-                        self.us(4, 2),
-                        outline_alpha=150,
-                        animated_line=True,
-                        line_phase=self._glow_phase,
-                        line_color=palette['card_current_outline']
+                        glow_fill,
+                        glow_outline,
+                        outline_width,
+                        outline_alpha=outline_alpha,
+                        animated_line=False
                     )
         except Exception as e:
             self._log(f"ERROR in schedule_glow_animation: {e}")
@@ -1373,19 +1390,19 @@ class IslamicBackground:
                 log_data = self._load_background_log()
                 shown = log_data.get("shown", {})
 
-                # If today already has an entry, return that image
+                # If today already has an entry, return that image — never overwrite it
                 for img_name, date_shown in shown.items():
                     if date_shown == today_str:
                         match = next((f for f in bg_images if f.name == img_name), None)
                         if match:
                             return match.resolve()
 
-                # Find images not yet shown in this cycle
+                # No entry for today yet — pick one and log it
                 all_names = {f.name for f in bg_images}
                 shown_names = set(shown.keys())
                 remaining = all_names - shown_names
 
-                # All shown — reset log and start fresh
+                # All shown — reset cycle and start fresh
                 if not remaining:
                     shown = {}
                     remaining = all_names
@@ -1394,7 +1411,7 @@ class IslamicBackground:
                 chosen_name = random.choice(sorted(remaining))
                 chosen_path = next(f for f in bg_images if f.name == chosen_name)
 
-                # Log it
+                # Log it (only once per day — restarts will hit the guard above)
                 shown[chosen_name] = today_str
                 log_data["shown"] = shown
                 self._save_background_log(log_data)
@@ -4783,7 +4800,7 @@ class IslamicBackground:
 
         # Optional traveling highlight segment around border.
         if animated_line:
-            lw = max(2, int(round(outline_width)))
+            lw = max(4, int(round(outline_width)) * 3)
             seg_color = line_color or outline_color or '#ffffff'
             sr, sg, sb = self._color_to_rgb(seg_color)
             seg_rgba = (sr, sg, sb, 255)
