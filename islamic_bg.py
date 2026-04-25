@@ -162,6 +162,11 @@ class IslamicBackground:
         self.glow_cycle_seconds = 5.0
         self._glow_phase = 0.0  # 0..1 oscillating
 
+        # Athan shine animation
+        self._athan_shine_running = False
+        self._athan_shine_cycle_start = None
+        self._athan_shine_photo = None  # keep PhotoImage alive
+
         self.logo_base_image = None
         self.logo_image_path = None
         self.logo_image_mtime = None
@@ -220,6 +225,11 @@ class IslamicBackground:
         # Red ribbon visibility cycle (15 sec ON, 15 sec OFF)
         self.ribbon_cycle_counter = 0  # 0-29 seconds
         self.ribbon_visible = True  # Start visible
+        self._ribbon_transition_running = False
+        self._ribbon_transition_target_visible = True
+        self._ribbon_transition_step = 0
+        self._ribbon_transition_photo_refs = []
+        self._ribbon_transition_ids = []
         
         # Tracking for upcoming prayer time changes (3+ days ahead)
         self.upcoming_changes = {}  # {prayer_name: {change_date: date, new_time: time, old_time: time}}
@@ -565,8 +575,9 @@ class IslamicBackground:
                     pulse = math.sin(t * math.pi)
 
                 # Update only the current prayer box with a soft glow pulse.
+                # Skip entirely while any athan warning is active.
                 current = self.last_rendered_current_prayer
-                if current and current in self.prayer_box_fill_ids:
+                if current and current in self.prayer_box_fill_ids and self.athan_callout_prayer is None:
                     palette = self.get_theme_palette()
                     outline_width = self.us(4, 2) + int(round(self.us(2, 1) * pulse))
                     outline_alpha = 150 + int(round(90 * pulse))
@@ -2756,7 +2767,9 @@ class IslamicBackground:
 
                 # Active athan window for configured duration from athan time.
                 if 0 <= elapsed < duration_seconds:
-                    blink_visible = (int(elapsed) % 2 == 0)
+                    # 3-second red ON, 1-second off cycle — clearly visible
+                    cycle_pos = int(elapsed) % 4
+                    blink_visible = (cycle_pos < 3)
                     return prayer_name, blink_visible
         except:
             pass
@@ -2771,50 +2784,213 @@ class IslamicBackground:
                     self.canvas.delete(item_id)
                 except:
                     pass
+        for item_id in getattr(self, '_athan_extra_ids', []):
+            try:
+                self.canvas.delete(item_id)
+            except:
+                pass
+        self._athan_extra_ids = []
         self.athan_callout_box_id = None
         self.athan_callout_text_id = None
         self.athan_callout_prayer = None
 
-    def update_athan_callout(self, athan_prayer=None, callout_visible=True):
-        """Show ATHAN callout anchored to the active prayer box."""
-        if (not athan_prayer
-            or not callout_visible
-            or athan_prayer not in self.prayer_box_bounds):
-            self.clear_athan_callout()
+    def _get_athan_box_geometry(self, prayer):
+        """Return (x, y, width, height, radius) for a prayer's card box, or None."""
+        if prayer in self.prayer_box_fill_styles:
+            style = self.prayer_box_fill_styles[prayer]
+            return style['x'], style['y'], style['width'], style['height'], style.get('radius', self.us(40, 22))
+        if prayer in self.prayer_box_bounds:
+            x, y, w, h = self.prayer_box_bounds[prayer]
+            return x, y, w, h, self.us(40, 22)
+        return None
+
+    def _draw_athan_shine_frame(self, cycle_pos):
+        """Draw one animation frame of the athan shine/alert overlay.
+
+        Cycle (4 s total):
+          0.00 – 0.35 s : shine strip sweeps in  (left→right)
+          0.35 – 3.00 s : alert text visible
+          3.00 – 3.35 s : shine strip sweeps out (left→right)
+          3.35 – 4.00 s : hidden, normal prayer times visible
+        """
+        prayer = self.athan_callout_prayer
+        if not prayer:
             return
 
+        geo = self._get_athan_box_geometry(prayer)
+        if not geo:
+            return
+        bx, by, bw, bh, _radius = geo
+
+        SWEEP = 0.35
+        SHOW_END = 3.00
+        FADE_OUT_END = 3.35
+
+        # ── clear previous frame's overlay items ──────────────────────────
+        for item_id in getattr(self, '_athan_extra_ids', []):
+            try:
+                self.canvas.delete(item_id)
+            except:
+                pass
+        self._athan_extra_ids = []
+        for attr in ('athan_callout_box_id', 'athan_callout_text_id'):
+            iid = getattr(self, attr, None)
+            if iid:
+                try:
+                    self.canvas.delete(iid)
+                except:
+                    pass
+                setattr(self, attr, None)
+
+        cx = bx + bw / 2
+        cy = by + bh / 2
+        palette = self.get_theme_palette()
+
+        # ── helpers ───────────────────────────────────────────────────────
+        def draw_shine_strip(t):
+            """Render a glowing diagonal light-streak across the box at position t (0→1)."""
+            iw, ih = max(1, int(bw)), max(1, int(bh))
+            img = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            tilt = int(ih * 0.28)          # parallelogram lean
+            strip_half = int(iw * 0.14)    # half-width of the shine band
+            # map t so strip travels fully across the box (include tilt overhang)
+            strip_cx = int(t * (iw + tilt * 2)) - tilt
+            steps = 18
+            for step in range(steps):
+                frac = step / (steps - 1)          # 0..1 across strip width
+                dist = abs(frac - 0.5) * 2         # 0 at center, 1 at edges
+                alpha = int(200 * (1.0 - dist ** 1.4))
+                off = int((frac - 0.5) * strip_half * 2)
+                x0 = strip_cx + off - tilt
+                x1 = strip_cx + off + max(2, int(iw * 0.018)) + tilt
+                d.polygon([(x0, 0), (x1, 0), (x1 + tilt * 2, ih), (x0 + tilt * 2, ih)],
+                           fill=(255, 245, 200, alpha))
+            photo = ImageTk.PhotoImage(img)
+            self._athan_shine_photo = photo           # prevent GC
+            item = self.canvas.create_image(int(bx), int(by), image=photo, anchor='nw')
+            self._athan_extra_ids.append(item)
+
+        def draw_alert_mask():
+            """Cover the prayer card text without changing the card's base color."""
+            self.athan_callout_box_id = self.draw_alpha_fill(
+                bx, by, bw, bh,
+                fill_color=palette['card_current_fill'],
+                opacity_percent=100,
+                radius=_radius,
+                outline_color=palette['card_current_outline'],
+                outline_width=4
+            )
+
+        def draw_alert_text():
+            """Draw prayer-name / ATHAN / NOW text with shadow for readability."""
+            prayer_label_raw = str(prayer).strip().upper()
+            if prayer_label_raw in ('DUHR', 'DHUHR', 'ZUHR'):
+                prayer_label = 'DHUHR'
+            else:
+                prayer_label = prayer_label_raw
+
+            # Match the prayer-name size used by the underlying prayer box layout.
+            # Table row cards use the smaller salah name size; full cards use larger.
+            prayer_name_size = self.fs(30, 15) if int(_radius) == 0 else self.fs(42, 21)
+            line_gap = self.fs(60, 30)
+            specs = [
+                (prayer_label,  prayer_name_size, '#ffffff', '#000000', -1.30),
+                ('ATHAN',       self.fs(40, 20), '#ffd700', '#000000',  0.00),
+                ('NOW',         self.fs(36, 18), '#ffd700', '#000000',  1.15),
+            ]
+            for i, (txt, sz, fg, shadow_col, off_mult) in enumerate(specs):
+                oy = cy + line_gap * off_mult
+                # drop shadow
+                sid = self.canvas.create_text(
+                    cx + 2, oy + 2, text=txt,
+                    font=('Arial', sz, 'bold'), fill=shadow_col
+                )
+                self._athan_extra_ids.append(sid)
+                # main text
+                tid = self.canvas.create_text(
+                    cx, oy, text=txt,
+                    font=('Arial', sz, 'bold'), fill=fg
+                )
+                if i == 0:
+                    self.athan_callout_text_id = tid
+                else:
+                    self._athan_extra_ids.append(tid)
+
+        # ── render the correct phase ──────────────────────────────────────
+        if cycle_pos < SWEEP:
+            t = cycle_pos / SWEEP                     # 0→1
+            draw_alert_mask()
+            draw_shine_strip(t)
+            if t > 0.55:
+                draw_alert_text()                      # text appears toward end of sweep
+
+        elif cycle_pos < SHOW_END:
+            draw_alert_mask()
+            draw_alert_text()
+
+        elif cycle_pos < FADE_OUT_END:
+            t = (cycle_pos - SHOW_END) / (FADE_OUT_END - SHOW_END)   # 0→1
+            draw_alert_mask()
+            if t < 0.45:
+                draw_alert_text()                      # text vanishes as sweep begins
+            draw_shine_strip(t)
+
+        # else: hidden phase – no overlay drawn
+
+        # ── raise all new items to front ─────────────────────────────────
+        for item_id in self._athan_extra_ids:
+            try:
+                self.canvas.tag_raise(item_id)
+            except:
+                pass
+        if self.athan_callout_box_id:
+            try:
+                self.canvas.tag_raise(self.athan_callout_box_id)
+                for item_id in self._athan_extra_ids:
+                    self.canvas.tag_raise(item_id)
+            except:
+                pass
+        if self.athan_callout_text_id:
+            try:
+                self.canvas.tag_raise(self.athan_callout_text_id)
+            except:
+                pass
+
+    def schedule_athan_shine_animation(self):
+        """30 fps animation loop for the athan shine/alert effect."""
+        if not getattr(self, '_athan_shine_running', False):
+            return
+        if not self.athan_callout_prayer:
+            self._athan_shine_running = False
+            self.clear_athan_callout()
+            return
         try:
-            x, y, width, _ = self.prayer_box_bounds[athan_prayer]
-            callout_text = f"{athan_prayer.upper()} ATHAN TIME"
-            text_font = ('Arial', self.fs(24, 12), 'bold')
-            text_width = tkfont.Font(font=text_font).measure(callout_text)
-
-            callout_height = self.us(40, 22)
-            callout_width = max(self.us(180, 120), text_width + self.us(34, 20))
-            callout_x = x + (width - callout_width) / 2
-            callout_y = y - self.us(48, 28)
-
-            self.clear_athan_callout()
-            self.athan_callout_box_id = self.draw_rounded_rectangle(
-                callout_x,
-                callout_y,
-                callout_width,
-                callout_height,
-                self.us(16, 8),
-                fill='#d32f2f',
-                outline='#b71c1c',
-                outline_width=self.us(2, 1)
-            )
-            self.athan_callout_text_id = self.canvas.create_text(
-                callout_x + (callout_width / 2),
-                callout_y + (callout_height / 2),
-                text=callout_text,
-                font=text_font,
-                fill='white'
-            )
-            self.athan_callout_prayer = athan_prayer
+            elapsed = (datetime.now() - self._athan_shine_cycle_start).total_seconds()
+            cycle_pos = elapsed % 4.0
+            self._draw_athan_shine_frame(cycle_pos)
+        except Exception as e:
+            self._log(f"ERROR in athan shine: {e}")
+        try:
+            self.root.after(33, self.schedule_athan_shine_animation)
         except:
-            self.clear_athan_callout()
+            pass
+
+    def _check_athan_shine(self, athan_prayer):
+        """Start, continue, or stop the athan shine animation."""
+        if not athan_prayer:
+            if getattr(self, '_athan_shine_running', False):
+                self._athan_shine_running = False
+                self.clear_athan_callout()
+            return
+        # Already running for the same prayer – do nothing (loop keeps going)
+        if getattr(self, '_athan_shine_running', False) and self.athan_callout_prayer == athan_prayer:
+            return
+        # Start (or restart for new prayer)
+        self.athan_callout_prayer = athan_prayer
+        self._athan_shine_cycle_start = datetime.now()
+        self._athan_shine_running = True
+        self.schedule_athan_shine_animation()
     
     def schedule_countdown_update(self):
         """Schedule the countdown update to run every second"""
@@ -2850,16 +3026,17 @@ class IslamicBackground:
 
                     blinking_prayer, blink_visible = self.get_athan_blink_state(prayers_data)
 
-                    if self.iqamah_overlay_visible:
-                        self.update_athan_callout(None)
-                    else:
-                        self.update_athan_callout(blinking_prayer, blink_visible)
-
                     if current_prayer_now != self.last_rendered_current_prayer:
                         self.last_rendered_current_prayer = current_prayer_now
                         self.update_prayer_box_highlight_states(current_prayer_now, blinking_prayer, blink_visible)
                     elif not self.iqamah_overlay_visible:
                         self.update_prayer_box_highlight_states(current_prayer_now, blinking_prayer, blink_visible)
+
+                    # Start/stop athan shine animation based on active athan window.
+                    if self.iqamah_overlay_visible:
+                        self._check_athan_shine(None)
+                    else:
+                        self._check_athan_shine(blinking_prayer)
 
                     display_data = self.get_next_line_display_data(prayers_data)
                     prefix_text = display_data['prefix_text']
@@ -4624,7 +4801,7 @@ class IslamicBackground:
                 outline_color='#ff0000',
                 outline_width=self.us(3, 2)
             )
-            self.canvas.itemconfigure(notice_bg, state=ribbon_state, tags=('prayer_change_ribbon',))
+            self.canvas.itemconfigure(notice_bg, state=ribbon_state, tags=('prayer_change_ribbon', 'prayer_change_ribbon_bg'))
 
             center_x = x + (width / 2)
             line1_y = y + (height * 0.18)
@@ -4684,10 +4861,13 @@ class IslamicBackground:
         for prayer_key, shape_id in self.prayer_box_shape_ids.items():
             try:
                 if prayer_key == blinking_prayer:
-                    if blink_visible:
-                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_current_fill'], palette['card_current_outline'], 4)
-                    else:
-                        self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'], palette['card_outline'], 3)
+                    # Keep base box styling normal; foreground athan overlay handles flashing.
+                    self.update_prayer_box_alpha_fill(
+                        prayer_key,
+                        palette['card_current_fill'],
+                        palette['card_current_outline'],
+                        4
+                    )
                 elif prayer_key == current_prayer:
                     pass  # Glow animation handles current prayer
                 else:
@@ -4763,7 +4943,7 @@ class IslamicBackground:
         return image_id
 
     def update_prayer_box_alpha_fill(self, prayer_key, fill_color, outline_color=None, outline_width=0, outline_alpha=255,
-                                     animated_line=False, line_phase=0.0, line_color=None):
+                                     animated_line=False, line_phase=0.0, line_color=None, override_alpha=None):
         """Update alpha fill+outline image in-place for a prayer box (no z-order change)."""
         style = self.prayer_box_fill_styles.get(prayer_key)
         if not style:
@@ -4775,7 +4955,10 @@ class IslamicBackground:
 
         w = max(1, int(round(style['width'])))
         h = max(1, int(round(style['height'])))
-        alpha = max(0, min(255, int(round((max(0, min(100, self.prayer_box_opacity_percent)) / 100.0) * 255))))
+        if override_alpha is not None:
+            alpha = max(0, min(255, int(override_alpha)))
+        else:
+            alpha = max(0, min(255, int(round((max(0, min(100, self.prayer_box_opacity_percent)) / 100.0) * 255))))
         r, g, b = self._color_to_rgb(fill_color)
         rad = max(1, int(round(style.get('radius', 0)))) if style.get('radius', 0) > 0 else 0
 
@@ -5029,9 +5212,9 @@ class IslamicBackground:
         
         # Draw sunrise time
         self.draw_time_text_with_meridiem(
-            x + width/2, y + self.us(113, 50),
+            x + width/2, y + self.us(126, 60),
             sunrise_time,
-            main_size=self.fs(54, 26),
+            main_size=self.fs(60, 30),
             suffix_size=self.fs(24, 12),
             color=palette['athan_text']
         )
@@ -5424,15 +5607,157 @@ class IslamicBackground:
     def schedule_ribbon_cycle(self):
         """Schedule ribbon visibility cycle (15s ON, 15s OFF)"""
         self.update_ribbon_cycle()
+
+    def _clear_ribbon_transition_artifacts(self):
+        """Remove temporary shine items used for ribbon transition."""
+        for item_id in getattr(self, '_ribbon_transition_ids', []):
+            try:
+                self.canvas.delete(item_id)
+            except:
+                pass
+        self._ribbon_transition_ids = []
+        self._ribbon_transition_photo_refs = []
+
+    def _resolve_ribbon_mask_colors(self, cx, cy):
+        """Pick base prayer-box colors under a ribbon card near center point (cx, cy)."""
+        palette = self.get_theme_palette()
+        fill_color = palette['card_fill']
+        outline_color = palette['card_outline']
+        try:
+            for prayer_key, style in self.prayer_box_fill_styles.items():
+                sx = style.get('x', 0)
+                sy = style.get('y', 0)
+                sw = style.get('width', 0)
+                sh = style.get('height', 0)
+                if sx <= cx <= (sx + sw) and sy <= cy <= (sy + sh):
+                    if prayer_key == self.last_rendered_current_prayer:
+                        fill_color = palette['card_current_fill']
+                        outline_color = palette['card_current_outline']
+                    break
+        except:
+            pass
+        return fill_color, outline_color
+
+    def _draw_ribbon_transition_shine(self, t):
+        """Draw moving shine across each visible iqamah-change ribbon box at progress t (0..1)."""
+        self._clear_ribbon_transition_artifacts()
+
+        bg_items = self.canvas.find_withtag('prayer_change_ribbon_bg')
+        if not bg_items:
+            return
+
+        for item_id in bg_items:
+            try:
+                bbox = self.canvas.bbox(item_id)
+            except:
+                bbox = None
+            if not bbox:
+                continue
+            x1, y1, x2, y2 = bbox
+            iw = max(1, int(x2 - x1))
+            ih = max(1, int(y2 - y1))
+            sweep_x = int(x1 + ((x2 - x1) * t))
+
+            # Peel/wipe mask: keep part of alert covered so the prayer-time box underneath
+            # appears behind the moving line. Direction depends on show vs hide target.
+            cx = (x1 + x2) / 2
+            cy = (y1 + y2) / 2
+            mask_fill, _mask_outline = self._resolve_ribbon_mask_colors(cx, cy)
+            if self._ribbon_transition_target_visible:
+                # Transition to alert: behind line -> alert, ahead -> prayer time.
+                mx1, mx2 = sweep_x, x2
+            else:
+                # Transition to prayer time: behind line -> prayer time, ahead -> alert.
+                mx1, mx2 = x1, sweep_x
+            if mx2 > mx1:
+                mask_id = self.draw_alpha_fill(
+                    mx1, y1, mx2 - mx1, ih,
+                    fill_color=mask_fill,
+                    opacity_percent=100,
+                    radius=0,
+                    outline_color=None,
+                    outline_width=0
+                )
+                self._ribbon_transition_ids.append(mask_id)
+
+            img = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
+            d = ImageDraw.Draw(img)
+            tilt = int(ih * 0.28)
+            strip_half = int(iw * 0.14)
+            strip_cx = int(t * (iw + tilt * 2)) - tilt
+            steps = 18
+            for step in range(steps):
+                frac = step / (steps - 1)
+                dist = abs(frac - 0.5) * 2
+                alpha = int(190 * (1.0 - dist ** 1.4))
+                off = int((frac - 0.5) * strip_half * 2)
+                px0 = strip_cx + off - tilt
+                px1 = strip_cx + off + max(2, int(iw * 0.018)) + tilt
+                d.polygon([(px0, 0), (px1, 0), (px1 + tilt * 2, ih), (px0 + tilt * 2, ih)],
+                          fill=(255, 245, 200, alpha))
+
+            photo = ImageTk.PhotoImage(img)
+            self._ribbon_transition_photo_refs.append(photo)
+            shine_id = self.canvas.create_image(int(x1), int(y1), image=photo, anchor='nw')
+            self._ribbon_transition_ids.append(shine_id)
+            try:
+                self.canvas.tag_raise(shine_id)
+            except:
+                pass
+
+    def _tick_ribbon_transition(self):
+        """Animate one short shine sweep for ribbon show/hide transitions."""
+        if not getattr(self, '_ribbon_transition_running', False):
+            return
+        frames = 11
+        step = getattr(self, '_ribbon_transition_step', 0)
+        t = 1.0 if frames <= 1 else (step / (frames - 1))
+
+        self._draw_ribbon_transition_shine(t)
+        self._ribbon_transition_step = step + 1
+
+        if self._ribbon_transition_step < frames:
+            try:
+                self.root.after(33, self._tick_ribbon_transition)
+            except:
+                self._ribbon_transition_running = False
+                self._clear_ribbon_transition_artifacts()
+        else:
+            self._ribbon_transition_running = False
+            self._clear_ribbon_transition_artifacts()
+            final_state = 'normal' if self._ribbon_transition_target_visible else 'hidden'
+            try:
+                self.canvas.itemconfig('prayer_change_ribbon', state=final_state)
+            except:
+                pass
+
+    def _start_ribbon_transition(self, target_visible):
+        """Start shine transition for iqamah-change ribbon show/hide."""
+        self._ribbon_transition_running = False
+        self._clear_ribbon_transition_artifacts()
+
+        # Keep ribbon visible during animation so the sweep is seen.
+        try:
+            self.canvas.itemconfig('prayer_change_ribbon', state='normal')
+        except:
+            pass
+
+        self._ribbon_transition_target_visible = bool(target_visible)
+        self._ribbon_transition_step = 0
+        self._ribbon_transition_running = True
+        self._tick_ribbon_transition()
     
     def update_ribbon_cycle(self):
         """Update prayer-change ribbon visibility (15s ON, 15s OFF) without redraw."""
         try:
+            prev_visible = self.ribbon_visible
             self.ribbon_cycle_counter = (self.ribbon_cycle_counter + 1) % 30
             self.ribbon_visible = (self.ribbon_cycle_counter < 15)
-
-            state = 'normal' if self.ribbon_visible else 'hidden'
-            self.canvas.itemconfig('prayer_change_ribbon', state=state)
+            if self.ribbon_visible != prev_visible:
+                self._start_ribbon_transition(self.ribbon_visible)
+            elif not self._ribbon_transition_running:
+                state = 'normal' if self.ribbon_visible else 'hidden'
+                self.canvas.itemconfig('prayer_change_ribbon', state=state)
         except Exception as e:
             self._log(f"ERROR in update_ribbon_cycle: {e}")
         
