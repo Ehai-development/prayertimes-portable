@@ -2917,10 +2917,9 @@ class IslamicBackground:
                 ]
             else:
                 # Full card layout: 4 lines with Arabic name between English and ATHAN
-                arabic_size = self.fs(38, 19)
                 specs = [
                     (prayer_label, prayer_name_size,  '#ffffff', '#000000', -1.50, 'Arial'),
-                    (arabic_name,  arabic_size,        '#c9f0ff', '#000000', -0.50, 'Traditional Arabic'),
+                    (arabic_name,  prayer_name_size,  '#c9f0ff', '#000000', -0.50, 'Traditional Arabic'),
                     ('ATHAN',      self.fs(40, 20),    '#ffd700', '#000000',  0.40, 'Arial'),
                     ('NOW',        self.fs(36, 18),    '#ffd700', '#000000',  1.40, 'Arial'),
                 ]
