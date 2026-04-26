@@ -187,6 +187,12 @@ class IslamicBackground:
         self.iqamah_post_duration_seconds = 180
         self.iqamah_overlay_cooldown_until = None
         self.iqamah_overlay_last_update = 0  # Timestamp to prevent rapid updates
+        self._iqamah_countdown_text_transition_after_id = None
+        self._iqamah_countdown_text_transition_temp_ids = []
+        self._iqamah_countdown_text_transition_payload = None
+        self._post_overlay_text_transition_after_id = None
+        self._post_overlay_text_transition_temp_ids = []
+        self._post_overlay_text_transition_payload = None
         
         # Tracking for announcement ticker - initialize empty
         self.announcement_text_id = None
@@ -3531,10 +3537,13 @@ class IslamicBackground:
             )
             self.iqamah_overlay_ids.append(top_left_time)
 
-            ayah_y = height * 0.24
-            notice_y = ayah_y + self.us(185, 105)
-            icon_y = notice_y + self.us(220, 125)
-            prayer_now_y = time_bg_y + (_th + time_pad_y * 2) / 2
+            # Pull the main post-prayer stack slightly upward and place
+            # "Prayer is now" below the phone icon (above masjid name area).
+            stack_shift_up = self.us(78, 40)
+            ayah_y = (height * 0.24) - stack_shift_up
+            notice_y = ayah_y + self.us(175, 98)
+            icon_y = notice_y + self.us(205, 116)
+            prayer_now_y = icon_y + self.us(205, 112)
 
             ayah_text = self.draw_outlined_text(
                 width / 2, ayah_y,
@@ -3613,13 +3622,160 @@ class IslamicBackground:
             else:
                 prayer_line = f'إقامة {arabic_name} بعد'
                 instr = 'يرجى وضع هاتفك على الوضع الصامت'
-        for item_id in self.canvas.find_withtag('iqamah_prayer_line_text'):
-            self.canvas.itemconfig(item_id, text=prayer_line)
-        for item_id in self.canvas.find_withtag('iqamah_instruction_text'):
-            self.canvas.itemconfig(item_id, text=instr)
+        self._start_iqamah_countdown_text_transition(prayer_line, instr)
         # English stays 10s, Arabic stays 5s
         delay = 10000 if self._iqamah_countdown_lang_english else 5000
         self._iqamah_countdown_toggle_id = self.root.after(delay, self._schedule_iqamah_countdown_text_toggle)
+
+    def _clear_iqamah_countdown_text_transition_artifacts(self):
+        """Cancel in-progress iqamah countdown text transition and clear temporary items."""
+        transition_after_id = getattr(self, '_iqamah_countdown_text_transition_after_id', None)
+        if transition_after_id is not None:
+            try:
+                self.root.after_cancel(transition_after_id)
+            except:
+                pass
+            self._iqamah_countdown_text_transition_after_id = None
+
+        # Remove all temporary transition layers (including outline copies).
+        try:
+            self.canvas.delete('iqamah_countdown_lang_transition')
+        except:
+            pass
+
+        for item_id in getattr(self, '_iqamah_countdown_text_transition_temp_ids', []):
+            try:
+                self.canvas.delete(item_id)
+            except:
+                pass
+        self._iqamah_countdown_text_transition_temp_ids = []
+        self._iqamah_countdown_text_transition_payload = None
+
+    def _start_iqamah_countdown_text_transition(self, next_prayer_line, next_instruction_line):
+        """Animate countdown overlay text between English and Arabic using slide/fade."""
+        if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'countdown':
+            return
+
+        prayer_ids = list(self.canvas.find_withtag('iqamah_prayer_line_text'))
+        instruction_ids = list(self.canvas.find_withtag('iqamah_instruction_text'))
+        if not prayer_ids or not instruction_ids:
+            return
+
+        current_prayer_line = self.canvas.itemcget(prayer_ids[0], 'text')
+        current_instruction_line = self.canvas.itemcget(instruction_ids[0], 'text')
+
+        if current_prayer_line == next_prayer_line and current_instruction_line == next_instruction_line:
+            return
+
+        prayer_bbox = self.canvas.bbox('iqamah_prayer_line_text')
+        instruction_bbox = self.canvas.bbox('iqamah_instruction_text')
+        if not prayer_bbox or not instruction_bbox:
+            for item_id in prayer_ids:
+                self.canvas.itemconfig(item_id, text=next_prayer_line)
+            for item_id in instruction_ids:
+                self.canvas.itemconfig(item_id, text=next_instruction_line)
+            return
+
+        self._clear_iqamah_countdown_text_transition_artifacts()
+
+        for item_id in prayer_ids:
+            self.canvas.itemconfig(item_id, state='hidden')
+        for item_id in instruction_ids:
+            self.canvas.itemconfig(item_id, state='hidden')
+
+        self._iqamah_countdown_text_transition_payload = {
+            'prayer_old': current_prayer_line,
+            'prayer_new': next_prayer_line,
+            'instruction_old': current_instruction_line,
+            'instruction_new': next_instruction_line,
+            'prayer_x': (prayer_bbox[0] + prayer_bbox[2]) / 2,
+            'prayer_y': (prayer_bbox[1] + prayer_bbox[3]) / 2,
+            'instruction_x': (instruction_bbox[0] + instruction_bbox[2]) / 2,
+            'instruction_y': (instruction_bbox[1] + instruction_bbox[3]) / 2,
+            'progress': 0.0,
+        }
+        self._tick_iqamah_countdown_text_transition()
+
+    def _tick_iqamah_countdown_text_transition(self):
+        """Advance the iqamah countdown text language transition animation."""
+        payload = getattr(self, '_iqamah_countdown_text_transition_payload', None)
+        if not payload:
+            return
+
+        if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'countdown':
+            self._clear_iqamah_countdown_text_transition_artifacts()
+            return
+
+        try:
+            self.canvas.delete('iqamah_countdown_lang_transition')
+        except:
+            pass
+        self._iqamah_countdown_text_transition_temp_ids = []
+
+        step = self.salah_name_transition_tick_ms / max(1, self.salah_name_transition_duration_ms)
+        payload['progress'] = min(1.0, payload['progress'] + step)
+        progress = payload['progress']
+        eased = progress * progress * (3.0 - (2.0 * progress))
+
+        travel = self.us(24, 12)
+        if eased < 0.5:
+            # Phase 1: move old language out (no overlap with new text).
+            phase = eased / 0.5
+            outgoing_shift = -travel * phase
+            prayer_out_id = self.canvas.create_text(
+                payload['prayer_x'], payload['prayer_y'] + outgoing_shift,
+                text=payload['prayer_old'],
+                font=('Arial', self.fs(78, 34), 'bold'),
+                fill='#2E7D32',
+                tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
+            )
+            instruction_out_id = self.canvas.create_text(
+                payload['instruction_x'], payload['instruction_y'] + outgoing_shift,
+                text=payload['instruction_old'],
+                font=('Arial', self.fs(68, 32), 'bold'),
+                fill='black',
+                tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
+            )
+            self._iqamah_countdown_text_transition_temp_ids.extend([
+                prayer_out_id,
+                instruction_out_id,
+            ])
+        else:
+            # Phase 2: move new language in after old language is gone.
+            phase = (eased - 0.5) / 0.5
+            incoming_shift = travel * (1.0 - phase)
+            prayer_in_id = self.canvas.create_text(
+                payload['prayer_x'], payload['prayer_y'] + incoming_shift,
+                text=payload['prayer_new'],
+                font=('Arial', self.fs(78, 34), 'bold'),
+                fill='#2E7D32',
+                tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
+            )
+            instruction_in_id = self.canvas.create_text(
+                payload['instruction_x'], payload['instruction_y'] + incoming_shift,
+                text=payload['instruction_new'],
+                font=('Arial', self.fs(68, 32), 'bold'),
+                fill='black',
+                tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
+            )
+            self._iqamah_countdown_text_transition_temp_ids.extend([
+                prayer_in_id,
+                instruction_in_id,
+            ])
+        self.canvas.tag_raise('iqamah_overlay')
+
+        if progress >= 1.0:
+            for item_id in self.canvas.find_withtag('iqamah_prayer_line_text'):
+                self.canvas.itemconfig(item_id, text=payload['prayer_new'], state='normal')
+            for item_id in self.canvas.find_withtag('iqamah_instruction_text'):
+                self.canvas.itemconfig(item_id, text=payload['instruction_new'], state='normal')
+            self._clear_iqamah_countdown_text_transition_artifacts()
+            return
+
+        self._iqamah_countdown_text_transition_after_id = self.root.after(
+            self.salah_name_transition_tick_ms,
+            self._tick_iqamah_countdown_text_transition
+        )
 
     def _schedule_post_overlay_text_toggle(self):
         """Toggle instruction & prayer-now text between English and Arabic every 5s."""
@@ -3633,13 +3789,151 @@ class IslamicBackground:
         else:
             instr = 'يرجى وضع هاتفك على الوضع الصامت'
             pnow = 'الصلاة الآن'
-        for item_id in self.canvas.find_withtag('post_instruction_text'):
-            self.canvas.itemconfig(item_id, text=instr)
-        for item_id in self.canvas.find_withtag('post_prayer_now_text'):
-            self.canvas.itemconfig(item_id, text=pnow)
+        self._start_post_overlay_text_transition(instr, pnow)
         # English stays 10s, Arabic stays 5s
         delay = 10000 if self._post_overlay_lang_english else 5000
         self._post_overlay_toggle_id = self.root.after(delay, self._schedule_post_overlay_text_toggle)
+
+    def _clear_post_overlay_text_transition_artifacts(self):
+        """Cancel post overlay text transition and clear temporary layers."""
+        transition_after_id = getattr(self, '_post_overlay_text_transition_after_id', None)
+        if transition_after_id is not None:
+            try:
+                self.root.after_cancel(transition_after_id)
+            except:
+                pass
+            self._post_overlay_text_transition_after_id = None
+
+        try:
+            self.canvas.delete('post_overlay_lang_transition')
+        except:
+            pass
+
+        for item_id in getattr(self, '_post_overlay_text_transition_temp_ids', []):
+            try:
+                self.canvas.delete(item_id)
+            except:
+                pass
+        self._post_overlay_text_transition_temp_ids = []
+        self._post_overlay_text_transition_payload = None
+
+    def _start_post_overlay_text_transition(self, next_instruction_line, next_prayer_now_line):
+        """Animate post overlay instruction/prayer-now text with clean non-overlap slide."""
+        if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'post':
+            return
+
+        instruction_ids = list(self.canvas.find_withtag('post_instruction_text'))
+        prayer_now_ids = list(self.canvas.find_withtag('post_prayer_now_text'))
+        if not instruction_ids or not prayer_now_ids:
+            return
+
+        current_instruction_line = self.canvas.itemcget(instruction_ids[0], 'text')
+        current_prayer_now_line = self.canvas.itemcget(prayer_now_ids[0], 'text')
+        if current_instruction_line == next_instruction_line and current_prayer_now_line == next_prayer_now_line:
+            return
+
+        instruction_bbox = self.canvas.bbox('post_instruction_text')
+        prayer_now_bbox = self.canvas.bbox('post_prayer_now_text')
+        if not instruction_bbox or not prayer_now_bbox:
+            for item_id in instruction_ids:
+                self.canvas.itemconfig(item_id, text=next_instruction_line)
+            for item_id in prayer_now_ids:
+                self.canvas.itemconfig(item_id, text=next_prayer_now_line)
+            return
+
+        self._clear_post_overlay_text_transition_artifacts()
+
+        for item_id in instruction_ids:
+            self.canvas.itemconfig(item_id, state='hidden')
+        for item_id in prayer_now_ids:
+            self.canvas.itemconfig(item_id, state='hidden')
+
+        self._post_overlay_text_transition_payload = {
+            'instruction_old': current_instruction_line,
+            'instruction_new': next_instruction_line,
+            'prayer_old': current_prayer_now_line,
+            'prayer_new': next_prayer_now_line,
+            'instruction_x': (instruction_bbox[0] + instruction_bbox[2]) / 2,
+            'instruction_y': (instruction_bbox[1] + instruction_bbox[3]) / 2,
+            'prayer_x': (prayer_now_bbox[0] + prayer_now_bbox[2]) / 2,
+            'prayer_y': (prayer_now_bbox[1] + prayer_now_bbox[3]) / 2,
+            'progress': 0.0,
+        }
+        self._tick_post_overlay_text_transition()
+
+    def _tick_post_overlay_text_transition(self):
+        """Advance post overlay language transition without overlapping old/new text."""
+        payload = getattr(self, '_post_overlay_text_transition_payload', None)
+        if not payload:
+            return
+
+        if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'post':
+            self._clear_post_overlay_text_transition_artifacts()
+            return
+
+        try:
+            self.canvas.delete('post_overlay_lang_transition')
+        except:
+            pass
+        self._post_overlay_text_transition_temp_ids = []
+
+        step = self.salah_name_transition_tick_ms / max(1, self.salah_name_transition_duration_ms)
+        payload['progress'] = min(1.0, payload['progress'] + step)
+        progress = payload['progress']
+        eased = progress * progress * (3.0 - (2.0 * progress))
+
+        travel = self.us(24, 12)
+        if eased < 0.5:
+            phase = eased / 0.5
+            outgoing_shift = -travel * phase
+            prayer_out_id = self.canvas.create_text(
+                payload['prayer_x'], payload['prayer_y'] + outgoing_shift,
+                text=payload['prayer_old'],
+                font=('Arial', self.fs(92, 42), 'bold'),
+                fill='#d32f2f',
+                tags=('iqamah_overlay', 'post_overlay_lang_transition')
+            )
+            instruction_out_id = self.canvas.create_text(
+                payload['instruction_x'], payload['instruction_y'] + outgoing_shift,
+                text=payload['instruction_old'],
+                font=('Arial', self.fs(62, 30), 'bold'),
+                fill='black',
+                tags=('iqamah_overlay', 'post_overlay_lang_transition')
+            )
+            self._post_overlay_text_transition_temp_ids.extend([prayer_out_id, instruction_out_id])
+        else:
+            phase = (eased - 0.5) / 0.5
+            incoming_shift = travel * (1.0 - phase)
+            prayer_in_id = self.canvas.create_text(
+                payload['prayer_x'], payload['prayer_y'] + incoming_shift,
+                text=payload['prayer_new'],
+                font=('Arial', self.fs(92, 42), 'bold'),
+                fill='#d32f2f',
+                tags=('iqamah_overlay', 'post_overlay_lang_transition')
+            )
+            instruction_in_id = self.canvas.create_text(
+                payload['instruction_x'], payload['instruction_y'] + incoming_shift,
+                text=payload['instruction_new'],
+                font=('Arial', self.fs(62, 30), 'bold'),
+                fill='black',
+                tags=('iqamah_overlay', 'post_overlay_lang_transition')
+            )
+            self._post_overlay_text_transition_temp_ids.extend([prayer_in_id, instruction_in_id])
+
+        self.canvas.tag_raise('iqamah_overlay')
+
+        if progress >= 1.0:
+            for item_id in self.canvas.find_withtag('post_instruction_text'):
+                self.canvas.itemconfig(item_id, text=payload['instruction_new'], state='normal')
+            for item_id in self.canvas.find_withtag('post_prayer_now_text'):
+                self.canvas.itemconfig(item_id, text=payload['prayer_new'], state='normal')
+            self._clear_post_overlay_text_transition_artifacts()
+            return
+
+        self._post_overlay_text_transition_after_id = self.root.after(
+            self.salah_name_transition_tick_ms,
+            self._tick_post_overlay_text_transition
+        )
 
     def clear_iqamah_overlay_items(self):
         """Delete overlay canvas items while preserving overlay state variables."""
@@ -3650,6 +3944,8 @@ class IslamicBackground:
                 if toggle_id:
                     self.root.after_cancel(toggle_id)
                     setattr(self, attr, None)
+            self._clear_iqamah_countdown_text_transition_artifacts()
+            self._clear_post_overlay_text_transition_artifacts()
             for item_id in self.iqamah_overlay_ids:
                 try:
                     self.canvas.delete(item_id)
@@ -5395,13 +5691,7 @@ class IslamicBackground:
 
         # Next prayer line in one row with split colors
         prayers_data = self.get_today_prayers()
-        transition_active, transition_source_arabic, transition_target_arabic, transition_eased = self.get_salah_name_transition_state()
-        if transition_active:
-            outgoing_display_data = self.get_next_line_display_data(prayers_data, force_show_arabic=transition_source_arabic)
-            display_data = self.get_next_line_display_data(prayers_data, force_show_arabic=transition_target_arabic)
-        else:
-            outgoing_display_data = None
-            display_data = self.get_next_line_display_data(prayers_data)
+        display_data = self.get_next_line_display_data(prayers_data)
         prefix_text = display_data['prefix_text']
         name_text = display_data['name_text']
         in_text = display_data['in_text']
@@ -5521,64 +5811,6 @@ class IslamicBackground:
                 anchor='w'
             )
 
-        if transition_active and outgoing_display_data:
-            travel = self.us(22, 11)
-            incoming_shift = travel * (1.0 - transition_eased)
-            outgoing_shift = -travel * transition_eased
-
-            incoming_prefix_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_prefix_text'], transition_eased)
-            incoming_name_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_name_text'], transition_eased)
-            incoming_in_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_in_text'], transition_eased)
-            incoming_countdown_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_countdown_text'], transition_eased)
-
-            self.canvas.itemconfig(self.next_prayer_prefix_text_id, fill=incoming_prefix_color)
-            self.canvas.itemconfig(self.next_prayer_name_text_id, fill=incoming_name_color)
-            self.canvas.itemconfig(self.next_prayer_in_text_id, fill=incoming_in_color)
-            self.canvas.itemconfig(self.countdown_text_id, fill=incoming_countdown_color)
-
-            px, py = self.canvas.coords(self.next_prayer_prefix_text_id)
-            nx, ny = self.canvas.coords(self.next_prayer_name_text_id)
-            ix, iy = self.canvas.coords(self.next_prayer_in_text_id)
-            cx, cy = self.canvas.coords(self.countdown_text_id)
-            self.canvas.coords(self.next_prayer_prefix_text_id, px, py + incoming_shift)
-            self.canvas.coords(self.next_prayer_name_text_id, nx, ny + incoming_shift)
-            self.canvas.coords(self.next_prayer_in_text_id, ix, iy + incoming_shift)
-            self.canvas.coords(self.countdown_text_id, cx, cy + incoming_shift)
-
-            out_prefix = outgoing_display_data['prefix_text']
-            out_name = outgoing_display_data['name_text']
-            out_in = outgoing_display_data['in_text']
-            out_countdown = outgoing_display_data['countdown_text']
-            out_rtl = bool(outgoing_display_data.get('rtl', False))
-
-            out_prefix_width = prefix_font_obj.measure(out_prefix)
-            out_name_width = line_font_obj.measure(out_name)
-            out_in_width = line_font_obj.measure(out_in)
-            out_countdown_width = line_font_obj.measure('88:88:88')
-
-            if out_rtl:
-                out_total_width = out_prefix_width + out_name_width + out_in_width + out_countdown_width + (rtl_gap * 3)
-            else:
-                out_total_width = out_prefix_width + out_name_width + out_in_width + out_countdown_width
-
-            out_left_x = x - (out_total_width / 2)
-            out_right_x = x + (out_total_width / 2)
-            out_prefix_color = self._mix_hex_color(palette['next_prefix_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
-            out_name_color = self._mix_hex_color(palette['next_name_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
-            out_in_color = self._mix_hex_color(palette['next_in_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
-            out_countdown_color = self._mix_hex_color(palette['next_countdown_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
-
-            if out_rtl:
-                self.canvas.create_text(out_right_x, line_center_y + outgoing_shift, text=out_prefix, font=prefix_font, fill=out_prefix_color, anchor='e')
-                self.canvas.create_text(out_right_x - out_prefix_width - rtl_gap, line_center_y + outgoing_shift, text=out_name, font=line_font, fill=out_name_color, anchor='e')
-                self.canvas.create_text(out_right_x - out_prefix_width - rtl_gap - out_name_width - rtl_gap, line_center_y + outgoing_shift, text=out_in, font=line_font, fill=out_in_color, anchor='e')
-                self.canvas.create_text(out_right_x - out_prefix_width - rtl_gap - out_name_width - rtl_gap - out_in_width - rtl_gap, line_center_y + outgoing_shift, text=out_countdown, font=line_font, fill=out_countdown_color, anchor='e')
-            else:
-                self.canvas.create_text(out_left_x, line_center_y + outgoing_shift, text=out_prefix, font=prefix_font, fill=out_prefix_color, anchor='w')
-                self.canvas.create_text(out_left_x + out_prefix_width, line_center_y + outgoing_shift, text=out_name, font=line_font, fill=out_name_color, anchor='w')
-                self.canvas.create_text(out_left_x + out_prefix_width + out_name_width, line_center_y + outgoing_shift, text=out_in, font=line_font, fill=out_in_color, anchor='w')
-                self.canvas.create_text(out_left_x + out_prefix_width + out_name_width + out_in_width, line_center_y + outgoing_shift, text=out_countdown, font=line_font, fill=out_countdown_color, anchor='w')
-
         # Date row now appears under the translation area.
         current_date = self.get_current_date()
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
@@ -5602,65 +5834,35 @@ class IslamicBackground:
         arabic_day_text = arabic_weekdays.get(current_date.weekday(), english_day_text)
         arabic_miladi_text = f"{current_date.day} {arabic_months.get(current_date.month, '')} {current_date.year}"
 
-        def build_date_text_parts(use_arabic):
-            day_value = arabic_day_text if use_arabic else english_day_text
-            miladi_value = arabic_miladi_text if use_arabic else english_miladi_text
-
-            if Gregorian:
-                try:
-                    hijri = Gregorian(current_date.year, current_date.month, current_date.day).to_hijri()
-                    english_hijri_text = f"{hijri.day} {self.get_hijri_month_name(hijri.month)} {hijri.year}H"
-                    arabic_hijri_months = {
-                        1: 'محرم', 2: 'صفر', 3: 'ربيع الأول', 4: 'ربيع الآخر',
-                        5: 'جمادى الأولى', 6: 'جمادى الآخرة', 7: 'رجب', 8: 'شعبان',
-                        9: 'رمضان', 10: 'شوال', 11: 'ذو القعدة', 12: 'ذو الحجة'
-                    }
-                    arabic_hijri_text = f"{hijri.day} {arabic_hijri_months.get(hijri.month, '')} {hijri.year}هـ"
-                    hijri_value = arabic_hijri_text if use_arabic else english_hijri_text
-                except:
-                    hijri_value = 'التاريخ الهجري غير متاح' if use_arabic else 'Hijri date unavailable'
-            else:
-                hijri_value = 'التاريخ الهجري غير متاح' if use_arabic else 'Hijri date unavailable'
-
-            date_font_value = ('Arial', self.fs(42, 24), 'bold') if use_arabic else ('Arial', self.fs(36, 20), 'bold')
-            return f"{day_value} | {hijri_value} | {miladi_value}", date_font_value
-
-        if transition_active:
-            outgoing_date_text, outgoing_date_font = build_date_text_parts(transition_source_arabic)
-            incoming_date_text, incoming_date_font = build_date_text_parts(transition_target_arabic)
-            date_travel = self.us(18, 9)
-            outgoing_fill = self._mix_hex_color('white', '#1b223b', min(1.0, transition_eased * 0.9))
-            incoming_fill = self._mix_hex_color('#1b223b', 'white', transition_eased)
-
-            self.draw_outlined_text(
-                x, date_block_y - (date_travel * transition_eased),
-                text=outgoing_date_text,
-                font=outgoing_date_font,
-                fill=outgoing_fill,
-                outline='#0b1020',
-                outline_px=self.us(3, 2),
-                anchor='n'
-            )
-            self.draw_outlined_text(
-                x, date_block_y + (date_travel * (1.0 - transition_eased)),
-                text=incoming_date_text,
-                font=incoming_date_font,
-                fill=incoming_fill,
-                outline='#0b1020',
-                outline_px=self.us(3, 2),
-                anchor='n'
-            )
+        day_text = arabic_day_text if show_arabic_name else english_day_text
+        miladi_text = arabic_miladi_text if show_arabic_name else english_miladi_text
+        if Gregorian:
+            try:
+                hijri = Gregorian(current_date.year, current_date.month, current_date.day).to_hijri()
+                english_hijri_text = f"{hijri.day} {self.get_hijri_month_name(hijri.month)} {hijri.year}H"
+                arabic_hijri_months = {
+                    1: 'محرم', 2: 'صفر', 3: 'ربيع الأول', 4: 'ربيع الآخر',
+                    5: 'جمادى الأولى', 6: 'جمادى الآخرة', 7: 'رجب', 8: 'شعبان',
+                    9: 'رمضان', 10: 'شوال', 11: 'ذو القعدة', 12: 'ذو الحجة'
+                }
+                arabic_hijri_text = f"{hijri.day} {arabic_hijri_months.get(hijri.month, '')} {hijri.year}هـ"
+                hijri_text = arabic_hijri_text if show_arabic_name else english_hijri_text
+            except:
+                hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
         else:
-            date_text, date_font = build_date_text_parts(show_arabic_name)
-            self.draw_outlined_text(
-                x, date_block_y,
-                text=date_text,
-                font=date_font,
-                fill='white',
-                outline='black',
-                outline_px=self.us(3, 2),
-                anchor='n'
-            )
+            hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
+
+        date_font = ('Arial', self.fs(42, 24), 'bold') if show_arabic_name else ('Arial', self.fs(36, 20), 'bold')
+
+        self.draw_outlined_text(
+            x, date_block_y,
+            text=f"{day_text} | {hijri_text} | {miladi_text}",
+            font=date_font,
+            fill='white',
+            outline='black',
+            outline_px=self.us(3, 2),
+            anchor='n'
+        )
 
     def draw_build_info(self, width, height):
         """Draw app build date/time in the bottom-right corner."""
