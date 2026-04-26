@@ -2655,7 +2655,7 @@ class IslamicBackground:
         
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
-    def get_next_line_display_data(self, prayers_data):
+    def get_next_line_display_data(self, prayers_data, force_show_arabic=None):
         """Return dynamic label/name/countdown for next-prayer line.
 
         During the window between a prayer's Athan and Iqama, show:
@@ -2668,7 +2668,10 @@ class IslamicBackground:
             is_friday = (self.get_current_date().weekday() == 4)
             current_prayer = self.get_current_prayer(prayers_data)
 
-            show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+            if force_show_arabic is None:
+                show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+            else:
+                show_arabic = bool(force_show_arabic)
             rtl_mode = show_arabic
             arabic_names = {
                 'Fajr': 'الفجر',
@@ -2738,7 +2741,10 @@ class IslamicBackground:
                 'rtl': rtl_mode
             }
         except:
-            show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+            if force_show_arabic is None:
+                show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+            else:
+                show_arabic = bool(force_show_arabic)
             return {
                 'prefix_text': 'الصلاة القادمة \u200f:\u200f ' if show_arabic else 'Next prayer: ',
                 'name_text': '---',
@@ -4670,17 +4676,64 @@ class IslamicBackground:
                 if iqamah_time != '--' and 'AM' not in iqamah_time and 'PM' not in iqamah_time:
                     iqamah_time = iqamah_time + ' AM'
 
-            show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
-            if show_arabic_name:
-                name_text = arabic
-                name_font = ('Arial', self.fs(30, 15), 'bold')
-            else:
-                name_text = display_name
-                name_font = ('Arial', self.fs(30, 15), 'bold')
-
-            self.canvas.create_text(col_name_x, y1 + (row_h / 2), text=name_text, font=name_font, fill=palette['title_text'])
+            self.draw_salah_name_transition_text(
+                col_name_x,
+                y1 + (row_h / 2),
+                display_name,
+                arabic,
+                ('Arial', self.fs(30, 15), 'bold'),
+                ('Arial', self.fs(30, 15), 'bold'),
+                palette['title_text'],
+                row_fill
+            )
             self.draw_time_text_with_meridiem(col_athan_x, y1 + (row_h / 2), athan_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['athan_text'])
             self.draw_time_text_with_meridiem(col_iqamah_x, y1 + (row_h / 2), iqamah_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['iqamah_text'])
+
+    def draw_salah_name_transition_text(self, x, y, english_text, arabic_text, english_font, arabic_font, fill_color, background_color, anchor='center'):
+        """Draw a short slide/fade transition between English and Arabic salah names."""
+        transition_active, source_show_arabic, target_show_arabic, eased = self.get_salah_name_transition_state()
+        show_arabic_name = target_show_arabic if transition_active else bool(getattr(self, 'salah_names_show_arabic', False))
+        has_arabic_text = bool(arabic_text and str(arabic_text).strip())
+
+        if not has_arabic_text:
+            self.canvas.create_text(x, y, text=english_text, font=english_font, fill=fill_color, anchor=anchor)
+            return
+
+        if not transition_active:
+            name_text = arabic_text if show_arabic_name else english_text
+            name_font = arabic_font if show_arabic_name else english_font
+            self.canvas.create_text(x, y, text=name_text, font=name_font, fill=fill_color, anchor=anchor)
+            return
+
+        outgoing_text = arabic_text if source_show_arabic else english_text
+        outgoing_font = arabic_font if source_show_arabic else english_font
+        incoming_text = arabic_text if target_show_arabic else english_text
+        incoming_font = arabic_font if target_show_arabic else english_font
+
+        if outgoing_text == incoming_text and outgoing_font == incoming_font:
+            self.canvas.create_text(x, y, text=incoming_text, font=incoming_font, fill=fill_color, anchor=anchor)
+            return
+
+        travel = self.us(26, 12)
+        outgoing_y = y - (travel * eased)
+        incoming_y = y + (travel * (1.0 - eased))
+        outgoing_fill = self._mix_hex_color(fill_color, background_color, min(1.0, eased * 0.9))
+        incoming_fill = self._mix_hex_color(background_color, fill_color, eased)
+
+        self.canvas.create_text(x, outgoing_y, text=outgoing_text, font=outgoing_font, fill=outgoing_fill, anchor=anchor)
+        self.canvas.create_text(x, incoming_y, text=incoming_text, font=incoming_font, fill=incoming_fill, anchor=anchor)
+
+    def get_salah_name_transition_state(self):
+        """Return (active, source_show_arabic, target_show_arabic, eased_progress)."""
+        current_show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+        if not getattr(self, 'salah_name_transition_active', False):
+            return False, current_show_arabic, current_show_arabic, 1.0
+
+        target_show_arabic = bool(getattr(self, 'salah_name_transition_target_arabic', current_show_arabic))
+        source_show_arabic = not target_show_arabic
+        progress = max(0.0, min(1.0, float(getattr(self, 'salah_name_transition_progress', 1.0))))
+        eased = progress * progress * (3.0 - (2.0 * progress))
+        return True, source_show_arabic, target_show_arabic, eased
     
     def draw_prayer_box(self, x, y, width, height, name, arabic, athan, iqamah, is_current=False, show_tomorrow_iqamah=False, prayer_key=None, tomorrow_iqamah=None):
         """Draw a single prayer time box with rounded corners"""
@@ -4736,18 +4789,15 @@ class IslamicBackground:
             )
         
         # Rotating prayer name (English/Arabic)
-        show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
-        if show_arabic_name:
-            name_text = arabic
-            name_font = ('Arial', self.fs(42, 21), 'bold')
-        else:
-            name_text = name
-            name_font = ('Arial', self.fs(42, 21), 'bold')
-        self.canvas.create_text(
-            x + width/2, y + self.us(42, 20),
-            text=name_text,
-            font=name_font,
-            fill=palette['title_text']
+        self.draw_salah_name_transition_text(
+            x + width/2,
+            y + self.us(42, 20),
+            name,
+            arabic,
+            ('Arial', self.fs(42, 21), 'bold'),
+            ('Arial', self.fs(42, 21), 'bold'),
+            palette['title_text'],
+            fill_color
         )
         
         if theme_name == 'elegent':
@@ -5345,7 +5395,13 @@ class IslamicBackground:
 
         # Next prayer line in one row with split colors
         prayers_data = self.get_today_prayers()
-        display_data = self.get_next_line_display_data(prayers_data)
+        transition_active, transition_source_arabic, transition_target_arabic, transition_eased = self.get_salah_name_transition_state()
+        if transition_active:
+            outgoing_display_data = self.get_next_line_display_data(prayers_data, force_show_arabic=transition_source_arabic)
+            display_data = self.get_next_line_display_data(prayers_data, force_show_arabic=transition_target_arabic)
+        else:
+            outgoing_display_data = None
+            display_data = self.get_next_line_display_data(prayers_data)
         prefix_text = display_data['prefix_text']
         name_text = display_data['name_text']
         in_text = display_data['in_text']
@@ -5465,6 +5521,64 @@ class IslamicBackground:
                 anchor='w'
             )
 
+        if transition_active and outgoing_display_data:
+            travel = self.us(22, 11)
+            incoming_shift = travel * (1.0 - transition_eased)
+            outgoing_shift = -travel * transition_eased
+
+            incoming_prefix_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_prefix_text'], transition_eased)
+            incoming_name_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_name_text'], transition_eased)
+            incoming_in_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_in_text'], transition_eased)
+            incoming_countdown_color = self._mix_hex_color(palette['next_panel_fill'], palette['next_countdown_text'], transition_eased)
+
+            self.canvas.itemconfig(self.next_prayer_prefix_text_id, fill=incoming_prefix_color)
+            self.canvas.itemconfig(self.next_prayer_name_text_id, fill=incoming_name_color)
+            self.canvas.itemconfig(self.next_prayer_in_text_id, fill=incoming_in_color)
+            self.canvas.itemconfig(self.countdown_text_id, fill=incoming_countdown_color)
+
+            px, py = self.canvas.coords(self.next_prayer_prefix_text_id)
+            nx, ny = self.canvas.coords(self.next_prayer_name_text_id)
+            ix, iy = self.canvas.coords(self.next_prayer_in_text_id)
+            cx, cy = self.canvas.coords(self.countdown_text_id)
+            self.canvas.coords(self.next_prayer_prefix_text_id, px, py + incoming_shift)
+            self.canvas.coords(self.next_prayer_name_text_id, nx, ny + incoming_shift)
+            self.canvas.coords(self.next_prayer_in_text_id, ix, iy + incoming_shift)
+            self.canvas.coords(self.countdown_text_id, cx, cy + incoming_shift)
+
+            out_prefix = outgoing_display_data['prefix_text']
+            out_name = outgoing_display_data['name_text']
+            out_in = outgoing_display_data['in_text']
+            out_countdown = outgoing_display_data['countdown_text']
+            out_rtl = bool(outgoing_display_data.get('rtl', False))
+
+            out_prefix_width = prefix_font_obj.measure(out_prefix)
+            out_name_width = line_font_obj.measure(out_name)
+            out_in_width = line_font_obj.measure(out_in)
+            out_countdown_width = line_font_obj.measure('88:88:88')
+
+            if out_rtl:
+                out_total_width = out_prefix_width + out_name_width + out_in_width + out_countdown_width + (rtl_gap * 3)
+            else:
+                out_total_width = out_prefix_width + out_name_width + out_in_width + out_countdown_width
+
+            out_left_x = x - (out_total_width / 2)
+            out_right_x = x + (out_total_width / 2)
+            out_prefix_color = self._mix_hex_color(palette['next_prefix_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
+            out_name_color = self._mix_hex_color(palette['next_name_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
+            out_in_color = self._mix_hex_color(palette['next_in_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
+            out_countdown_color = self._mix_hex_color(palette['next_countdown_text'], palette['next_panel_fill'], min(1.0, transition_eased * 0.9))
+
+            if out_rtl:
+                self.canvas.create_text(out_right_x, line_center_y + outgoing_shift, text=out_prefix, font=prefix_font, fill=out_prefix_color, anchor='e')
+                self.canvas.create_text(out_right_x - out_prefix_width - rtl_gap, line_center_y + outgoing_shift, text=out_name, font=line_font, fill=out_name_color, anchor='e')
+                self.canvas.create_text(out_right_x - out_prefix_width - rtl_gap - out_name_width - rtl_gap, line_center_y + outgoing_shift, text=out_in, font=line_font, fill=out_in_color, anchor='e')
+                self.canvas.create_text(out_right_x - out_prefix_width - rtl_gap - out_name_width - rtl_gap - out_in_width - rtl_gap, line_center_y + outgoing_shift, text=out_countdown, font=line_font, fill=out_countdown_color, anchor='e')
+            else:
+                self.canvas.create_text(out_left_x, line_center_y + outgoing_shift, text=out_prefix, font=prefix_font, fill=out_prefix_color, anchor='w')
+                self.canvas.create_text(out_left_x + out_prefix_width, line_center_y + outgoing_shift, text=out_name, font=line_font, fill=out_name_color, anchor='w')
+                self.canvas.create_text(out_left_x + out_prefix_width + out_name_width, line_center_y + outgoing_shift, text=out_in, font=line_font, fill=out_in_color, anchor='w')
+                self.canvas.create_text(out_left_x + out_prefix_width + out_name_width + out_in_width, line_center_y + outgoing_shift, text=out_countdown, font=line_font, fill=out_countdown_color, anchor='w')
+
         # Date row now appears under the translation area.
         current_date = self.get_current_date()
         show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
@@ -5488,35 +5602,65 @@ class IslamicBackground:
         arabic_day_text = arabic_weekdays.get(current_date.weekday(), english_day_text)
         arabic_miladi_text = f"{current_date.day} {arabic_months.get(current_date.month, '')} {current_date.year}"
 
-        day_text = arabic_day_text if show_arabic_name else english_day_text
-        miladi_text = arabic_miladi_text if show_arabic_name else english_miladi_text
-        if Gregorian:
-            try:
-                hijri = Gregorian(current_date.year, current_date.month, current_date.day).to_hijri()
-                english_hijri_text = f"{hijri.day} {self.get_hijri_month_name(hijri.month)} {hijri.year}H"
-                arabic_hijri_months = {
-                    1: 'محرم', 2: 'صفر', 3: 'ربيع الأول', 4: 'ربيع الآخر',
-                    5: 'جمادى الأولى', 6: 'جمادى الآخرة', 7: 'رجب', 8: 'شعبان',
-                    9: 'رمضان', 10: 'شوال', 11: 'ذو القعدة', 12: 'ذو الحجة'
-                }
-                arabic_hijri_text = f"{hijri.day} {arabic_hijri_months.get(hijri.month, '')} {hijri.year}هـ"
-                hijri_text = arabic_hijri_text if show_arabic_name else english_hijri_text
-            except:
-                hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
+        def build_date_text_parts(use_arabic):
+            day_value = arabic_day_text if use_arabic else english_day_text
+            miladi_value = arabic_miladi_text if use_arabic else english_miladi_text
+
+            if Gregorian:
+                try:
+                    hijri = Gregorian(current_date.year, current_date.month, current_date.day).to_hijri()
+                    english_hijri_text = f"{hijri.day} {self.get_hijri_month_name(hijri.month)} {hijri.year}H"
+                    arabic_hijri_months = {
+                        1: 'محرم', 2: 'صفر', 3: 'ربيع الأول', 4: 'ربيع الآخر',
+                        5: 'جمادى الأولى', 6: 'جمادى الآخرة', 7: 'رجب', 8: 'شعبان',
+                        9: 'رمضان', 10: 'شوال', 11: 'ذو القعدة', 12: 'ذو الحجة'
+                    }
+                    arabic_hijri_text = f"{hijri.day} {arabic_hijri_months.get(hijri.month, '')} {hijri.year}هـ"
+                    hijri_value = arabic_hijri_text if use_arabic else english_hijri_text
+                except:
+                    hijri_value = 'التاريخ الهجري غير متاح' if use_arabic else 'Hijri date unavailable'
+            else:
+                hijri_value = 'التاريخ الهجري غير متاح' if use_arabic else 'Hijri date unavailable'
+
+            date_font_value = ('Arial', self.fs(42, 24), 'bold') if use_arabic else ('Arial', self.fs(36, 20), 'bold')
+            return f"{day_value} | {hijri_value} | {miladi_value}", date_font_value
+
+        if transition_active:
+            outgoing_date_text, outgoing_date_font = build_date_text_parts(transition_source_arabic)
+            incoming_date_text, incoming_date_font = build_date_text_parts(transition_target_arabic)
+            date_travel = self.us(18, 9)
+            outgoing_fill = self._mix_hex_color('white', '#1b223b', min(1.0, transition_eased * 0.9))
+            incoming_fill = self._mix_hex_color('#1b223b', 'white', transition_eased)
+
+            self.draw_outlined_text(
+                x, date_block_y - (date_travel * transition_eased),
+                text=outgoing_date_text,
+                font=outgoing_date_font,
+                fill=outgoing_fill,
+                outline='#0b1020',
+                outline_px=self.us(3, 2),
+                anchor='n'
+            )
+            self.draw_outlined_text(
+                x, date_block_y + (date_travel * (1.0 - transition_eased)),
+                text=incoming_date_text,
+                font=incoming_date_font,
+                fill=incoming_fill,
+                outline='#0b1020',
+                outline_px=self.us(3, 2),
+                anchor='n'
+            )
         else:
-            hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
-
-        date_font = ('Arial', self.fs(42, 24), 'bold') if show_arabic_name else ('Arial', self.fs(36, 20), 'bold')
-
-        self.draw_outlined_text(
-            x, date_block_y,
-            text=f"{day_text} | {hijri_text} | {miladi_text}",
-            font=date_font,
-            fill='white',
-            outline='black',
-            outline_px=self.us(3, 2),
-            anchor='n'
-        )
+            date_text, date_font = build_date_text_parts(show_arabic_name)
+            self.draw_outlined_text(
+                x, date_block_y,
+                text=date_text,
+                font=date_font,
+                fill='white',
+                outline='black',
+                outline_px=self.us(3, 2),
+                anchor='n'
+            )
 
     def draw_build_info(self, width, height):
         """Draw app build date/time in the bottom-right corner."""
@@ -5535,11 +5679,15 @@ class IslamicBackground:
         self.update_prayer_time_toggle()
 
     def _start_salah_name_transition(self, target_show_arabic):
-        """Switch language instantly with a single clean redraw."""
+        """Start a short animated transition between English and Arabic prayer names."""
         target_show_arabic = bool(target_show_arabic)
+        current_show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
+
+        if not self.salah_name_transition_active and target_show_arabic == current_show_arabic:
+            self._last_salah_name_arabic_state = target_show_arabic
+            return
+
         self.salah_name_transition_target_arabic = target_show_arabic
-        self.salah_names_show_arabic = target_show_arabic
-        self._last_salah_name_arabic_state = target_show_arabic
 
         if self.salah_name_transition_after_id is not None:
             try:
@@ -5548,10 +5696,14 @@ class IslamicBackground:
                 pass
             self.salah_name_transition_after_id = None
 
-        self.salah_name_transition_active = False
-        self.salah_name_transition_progress = 1.0
+        self.salah_name_transition_active = True
+        self.salah_name_transition_progress = 0.0
         if not self.iqamah_overlay_visible:
             self.redraw_full_display()
+        self.salah_name_transition_after_id = self.root.after(
+            self.salah_name_transition_tick_ms,
+            self._tick_salah_name_transition
+        )
 
     def _tick_salah_name_transition(self):
         """Advance Arabic reveal progress and request redraws."""
