@@ -2883,34 +2883,60 @@ class IslamicBackground:
             )
 
         def draw_alert_text():
-            """Draw prayer-name / ATHAN / NOW text with shadow for readability."""
+            """Draw prayer-name / Arabic name / ATHAN / NOW text with shadow."""
             prayer_label_raw = str(prayer).strip().upper()
             if prayer_label_raw in ('DUHR', 'DHUHR', 'ZUHR'):
                 prayer_label = 'DHUHR'
             else:
                 prayer_label = prayer_label_raw
 
+            arabic_map = {
+                'FAJR': '\u0627\u0644\u0641\u062c\u0631',
+                'DHUHR': '\u0627\u0644\u0638\u0647\u0631',
+                'ASR': '\u0627\u0644\u0639\u0635\u0631',
+                'MAGHRIB': '\u0627\u0644\u0645\u063a\u0631\u0628',
+                'ISHA': '\u0627\u0644\u0639\u0634\u0627\u0621',
+                'JUMAA': '\u0627\u0644\u062c\u0645\u0639\u0629',
+                'JUMAH': '\u0627\u0644\u062c\u0645\u0639\u0629',
+                'SUNRISE': '\u0627\u0644\u0634\u0631\u0648\u0642',
+            }
+            arabic_name = arabic_map.get(prayer_label, '')
+
             # Match the prayer-name size used by the underlying prayer box layout.
             # Table row cards use the smaller salah name size; full cards use larger.
-            prayer_name_size = self.fs(30, 15) if int(_radius) == 0 else self.fs(42, 21)
+            is_table_row = int(_radius) == 0
+            prayer_name_size = self.fs(30, 15) if is_table_row else self.fs(42, 21)
             line_gap = self.fs(60, 30)
-            specs = [
-                (prayer_label,  prayer_name_size, '#ffffff', '#000000', -1.30),
-                ('ATHAN',       self.fs(40, 20), '#ffd700', '#000000',  0.00),
-                ('NOW',         self.fs(36, 18), '#ffd700', '#000000',  1.15),
-            ]
-            for i, (txt, sz, fg, shadow_col, off_mult) in enumerate(specs):
+
+            if is_table_row or not arabic_name:
+                # Compact layout: 3 lines, no Arabic (not enough vertical space)
+                specs = [
+                    (prayer_label, prayer_name_size, '#ffffff', '#000000', -1.30, 'Arial'),
+                    ('ATHAN',      self.fs(40, 20),  '#ffd700', '#000000',  0.00, 'Arial'),
+                    ('NOW',        self.fs(36, 18),  '#ffd700', '#000000',  1.15, 'Arial'),
+                ]
+            else:
+                # Full card layout: 4 lines with Arabic name between English and ATHAN
+                arabic_size = self.fs(38, 19)
+                specs = [
+                    (prayer_label, prayer_name_size,  '#ffffff', '#000000', -1.50, 'Arial'),
+                    (arabic_name,  arabic_size,        '#c9f0ff', '#000000', -0.50, 'Traditional Arabic'),
+                    ('ATHAN',      self.fs(40, 20),    '#ffd700', '#000000',  0.40, 'Arial'),
+                    ('NOW',        self.fs(36, 18),    '#ffd700', '#000000',  1.40, 'Arial'),
+                ]
+
+            for i, (txt, sz, fg, shadow_col, off_mult, font_family) in enumerate(specs):
                 oy = cy + line_gap * off_mult
                 # drop shadow
                 sid = self.canvas.create_text(
                     cx + 2, oy + 2, text=txt,
-                    font=('Arial', sz, 'bold'), fill=shadow_col
+                    font=(font_family, sz, 'bold'), fill=shadow_col
                 )
                 self._athan_extra_ids.append(sid)
                 # main text
                 tid = self.canvas.create_text(
                     cx, oy, text=txt,
-                    font=('Arial', sz, 'bold'), fill=fg
+                    font=(font_family, sz, 'bold'), fill=fg
                 )
                 if i == 0:
                     self.athan_callout_text_id = tid
