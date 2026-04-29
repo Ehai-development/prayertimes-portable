@@ -166,6 +166,13 @@ class IslamicBackground:
         self._athan_shine_running = False
         self._athan_shine_cycle_start = None
         self._athan_shine_photo = None  # keep PhotoImage alive
+        self._athan_overlay_base_image = None
+        self._athan_overlay_photo = None
+        self._athan_overlay_image_size = (0, 0)
+        self._athan_overlay_image_path = None
+        self._athan_overlay_time_text_id = None
+        self._athan_overlay_iqamah_text_id = None
+        self._athan_overlay_signature = None
 
         self.logo_base_image = None
         self.logo_image_path = None
@@ -451,11 +458,14 @@ class IslamicBackground:
     def _generate_and_apply_background_deferred(self):
         """Generate and apply Islamic background after window is visible"""
         try:
+            athan_running = bool(getattr(self, '_athan_shine_running', False) and self.athan_callout_prayer)
             # Redraw in proper z-order: background first, then foreground content
             self.canvas.delete('all')
             self.draw_islamic_background()
             self.draw_prayer_times()
             self.draw_test_mode_indicator()
+            if athan_running:
+                self._draw_athan_shine_frame(0)
 
             # Keep overlays above foreground content
             self.canvas.tag_raise('iqamah_overlay')
@@ -503,6 +513,7 @@ class IslamicBackground:
             # Remember overlay state before wiping canvas
             overlay_was_visible = self.iqamah_overlay_visible
             overlay_mode = self.iqamah_overlay_mode
+            athan_running = bool(getattr(self, '_athan_shine_running', False) and self.athan_callout_prayer)
             self.canvas.delete('all')
             self._alpha_image_refs = {}
             self.prayer_box_fill_ids = {}
@@ -516,6 +527,8 @@ class IslamicBackground:
             self.draw_islamic_background()
             self.draw_prayer_times()
             self.draw_test_mode_indicator()
+            if athan_running:
+                self._draw_athan_shine_frame(0)
             # Re-show iqamah overlay if it was active (canvas.delete wiped it)
             if overlay_was_visible:
                 self.iqamah_overlay_ids = []
@@ -1213,7 +1226,9 @@ class IslamicBackground:
         self.config['prayernow'] = prayernow_minutes
         self.iqamah_post_duration_seconds = prayernow_minutes * 60
 
-        # Athan callout flashing duration in seconds (0 disables callout flashing)
+        # Athan callout duration. For convenience, values <= 60 are treated
+        # as minutes (e.g., 15 means 15 minutes). Larger values are treated
+        # as seconds for backward compatibility.
         try:
             athan_blink_duration = int(self.config.get('athancalloutduran', 25))
             athan_blink_duration = max(0, athan_blink_duration)
@@ -2759,10 +2774,73 @@ class IslamicBackground:
                 'rtl': show_arabic
             }
 
+    def get_athan_notification_duration_seconds(self):
+        """Return athan notification duration in seconds."""
+        try:
+            duration_value = int(self.config.get('athancalloutduran', 25))
+            duration_value = max(0, duration_value)
+        except:
+            duration_value = 25
+        return duration_value
+
+    def _get_athan_overlay_image_path(self):
+        """Resolve Muathin background image path for athan overlay."""
+        candidates = []
+
+        if getattr(sys, 'frozen', False):
+            exe_base = Path(sys.executable).resolve().parent
+            candidates.extend([
+                exe_base.parent / 'images' / 'Athan' / 'Muathin.png',
+                exe_base / 'images' / 'Athan' / 'Muathin.png',
+            ])
+
+        app_base = Path(__file__).resolve().parent
+        candidates.extend([
+            Path.cwd() / 'images' / 'Athan' / 'Muathin.png',
+            app_base / 'images' / 'Athan' / 'Muathin.png',
+        ])
+
+        for candidate in candidates:
+            try:
+                if candidate.is_file():
+                    return candidate.resolve()
+            except:
+                pass
+        return None
+
+    def _get_prayer_iqamah_countdown(self, prayer):
+        """Return iqamah countdown text for the active athan prayer."""
+        try:
+            prayers_data = self.get_today_prayers()
+            if not prayers_data:
+                return '--:--:--'
+
+            prayer_key_map = {
+                'fajr': 'Fajr',
+                'duhr': 'Duhr',
+                'dhuhr': 'Duhr',
+                'zuhr': 'Duhr',
+                'asr': 'Asr',
+                'maghrib': 'Maghrib',
+                'isha': 'Isha',
+            }
+            key = prayer_key_map.get(str(prayer).strip().lower(), str(prayer).strip())
+            iqamah_time = self.parse_time(prayers_data.get(f'{key}Iqama', ''))
+
+            now_dt = datetime.combine(self.get_current_date(), self.get_current_time())
+            if key == 'Duhr' and now_dt.weekday() == 4 and self.jummah_time:
+                iqamah_time = self.jummah_time
+
+            if not iqamah_time:
+                return '--:--:--'
+            return self.get_countdown(iqamah_time)
+        except:
+            return '--:--:--'
+
     def get_athan_blink_state(self, prayers_data):
         """Return active athan prayer during athan window, else (None, False)."""
         try:
-            duration_seconds = int(self.config.get('athancalloutduran', 25))
+            duration_seconds = self.get_athan_notification_duration_seconds()
             if duration_seconds <= 0 or not prayers_data:
                 return None, False
 
@@ -2779,10 +2857,7 @@ class IslamicBackground:
 
                 # Active athan window for configured duration from athan time.
                 if 0 <= elapsed < duration_seconds:
-                    # 3-second red ON, 1-second off cycle — clearly visible
-                    cycle_pos = int(elapsed) % 4
-                    blink_visible = (cycle_pos < 3)
-                    return prayer_name, blink_visible
+                    return prayer_name, True
         except:
             pass
 
@@ -2805,6 +2880,9 @@ class IslamicBackground:
         self.athan_callout_box_id = None
         self.athan_callout_text_id = None
         self.athan_callout_prayer = None
+        self._athan_overlay_time_text_id = None
+        self._athan_overlay_iqamah_text_id = None
+        self._athan_overlay_signature = None
 
     def _get_athan_box_geometry(self, prayer):
         """Return (x, y, width, height, radius) for a prayer's card box, or None."""
@@ -2817,185 +2895,193 @@ class IslamicBackground:
         return None
 
     def _draw_athan_shine_frame(self, cycle_pos):
-        """Draw one animation frame of the athan shine/alert overlay.
-
-        Cycle (4 s total):
-          0.00 – 0.35 s : shine strip sweeps in  (left→right)
-          0.35 – 3.00 s : alert text visible
-          3.00 – 3.35 s : shine strip sweeps out (left→right)
-          3.35 – 4.00 s : hidden, normal prayer times visible
-        """
+        """Draw full-screen athan overlay with Muathin background and countdowns."""
         prayer = self.athan_callout_prayer
         if not prayer:
             return
 
-        geo = self._get_athan_box_geometry(prayer)
-        if not geo:
-            return
-        bx, by, bw, bh, _radius = geo
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
 
-        SWEEP = 0.35
-        SHOW_END = 3.00
-        FADE_OUT_END = 3.35
-
-        # ── clear previous frame's overlay items ──────────────────────────
-        for item_id in getattr(self, '_athan_extra_ids', []):
-            try:
-                self.canvas.delete(item_id)
-            except:
-                pass
-        self._athan_extra_ids = []
-        for attr in ('athan_callout_box_id', 'athan_callout_text_id'):
-            iid = getattr(self, attr, None)
-            if iid:
+        athan_img_path = self._get_athan_overlay_image_path()
+        if athan_img_path is not None:
+            athan_img_path_str = str(athan_img_path)
+            if self._athan_overlay_image_path != athan_img_path_str:
                 try:
-                    self.canvas.delete(iid)
+                    self._athan_overlay_base_image = Image.open(athan_img_path_str).convert('RGB')
+                    self._athan_overlay_image_path = athan_img_path_str
+                    self._athan_overlay_image_size = (0, 0)
+                    self._athan_overlay_photo = None
+                except Exception as e:
+                    self._log(f"Warning: unable to load athan overlay image '{athan_img_path_str}': {e}")
+                    self._athan_overlay_base_image = None
+                    self._athan_overlay_photo = None
+                    self._athan_overlay_image_size = (0, 0)
+                    self._athan_overlay_image_path = None
+
+        if self._athan_overlay_base_image is not None:
+            if self._athan_overlay_image_size != (width, height) or self._athan_overlay_photo is None:
+                try:
+                    if hasattr(Image, 'Resampling'):
+                        resized = self._athan_overlay_base_image.resize((width, height), Image.Resampling.LANCZOS)
+                    else:
+                        resized = self._athan_overlay_base_image.resize((width, height), Image.LANCZOS)
+                    self._athan_overlay_photo = ImageTk.PhotoImage(resized)
+                    self._athan_overlay_image_size = (width, height)
+                except Exception as e:
+                    self._log(f"Warning: unable to resize athan overlay image '{self._athan_overlay_image_path}': {e}")
+                    self._athan_overlay_photo = None
+
+        prayer_name_map = {
+            'fajr': 'Fajr',
+            'duhr': 'Dhuhr',
+            'dhuhr': 'Dhuhr',
+            'zuhr': 'Dhuhr',
+            'asr': 'Asr',
+            'maghrib': 'Maghrib',
+            'isha': 'Isha',
+        }
+        prayer_display = prayer_name_map.get(str(prayer).strip().lower(), str(prayer).strip().title())
+        center_text = f"{prayer_display} Athan Now"
+
+        time_font = ('Arial', self.fs(52, 24), 'bold')
+        right_font = ('Arial', self.fs(44, 21), 'bold')
+        current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
+        iqamah_countdown_text = self._get_prayer_iqamah_countdown(prayer_display)
+        right_line_text = f"{prayer_display} Iqamah in : {iqamah_countdown_text}"
+
+        signature = (prayer_display, width, height, str(athan_img_path) if athan_img_path else '')
+        needs_rebuild = (self._athan_overlay_signature != signature)
+        if not needs_rebuild:
+            try:
+                needs_rebuild = not bool(self.canvas.type(self._athan_overlay_time_text_id))
+            except:
+                needs_rebuild = True
+
+        if needs_rebuild:
+            for item_id in getattr(self, '_athan_extra_ids', []):
+                try:
+                    self.canvas.delete(item_id)
                 except:
                     pass
-                setattr(self, attr, None)
+            self._athan_extra_ids = []
+            for attr in ('athan_callout_box_id', 'athan_callout_text_id'):
+                iid = getattr(self, attr, None)
+                if iid:
+                    try:
+                        self.canvas.delete(iid)
+                    except:
+                        pass
+                    setattr(self, attr, None)
 
-        cx = bx + bw / 2
-        cy = by + bh / 2
-        palette = self.get_theme_palette()
+            if self._athan_overlay_photo is not None:
+                bg_id = self.canvas.create_image(0, 0, image=self._athan_overlay_photo, anchor='nw')
+            else:
+                bg_id = self.canvas.create_rectangle(-2, -2, width + 2, height + 2, fill='#1b1b1b', outline='')
+            self._athan_extra_ids.append(bg_id)
 
-        # ── helpers ───────────────────────────────────────────────────────
-        def draw_shine_strip(t):
-            """Render a glowing diagonal light-streak across the box at position t (0→1)."""
-            iw, ih = max(1, int(bw)), max(1, int(bh))
-            img = Image.new('RGBA', (iw, ih), (0, 0, 0, 0))
-            d = ImageDraw.Draw(img)
-            tilt = int(ih * 0.28)          # parallelogram lean
-            strip_half = int(iw * 0.14)    # half-width of the shine band
-            # map t so strip travels fully across the box (include tilt overhang)
-            strip_cx = int(t * (iw + tilt * 2)) - tilt
-            steps = 18
-            for step in range(steps):
-                frac = step / (steps - 1)          # 0..1 across strip width
-                dist = abs(frac - 0.5) * 2         # 0 at center, 1 at edges
-                alpha = int(200 * (1.0 - dist ** 1.4))
-                off = int((frac - 0.5) * strip_half * 2)
-                x0 = strip_cx + off - tilt
-                x1 = strip_cx + off + max(2, int(iw * 0.018)) + tilt
-                d.polygon([(x0, 0), (x1, 0), (x1 + tilt * 2, ih), (x0 + tilt * 2, ih)],
-                           fill=(255, 245, 200, alpha))
-            photo = ImageTk.PhotoImage(img)
-            self._athan_shine_photo = photo           # prevent GC
-            item = self.canvas.create_image(int(bx), int(by), image=photo, anchor='nw')
-            self._athan_extra_ids.append(item)
-
-        def draw_alert_mask():
-            """Cover the prayer card text without changing the card's base color."""
-            self.athan_callout_box_id = self.draw_alpha_fill(
-                bx, by, bw, bh,
-                fill_color=palette['card_current_fill'],
-                opacity_percent=100,
-                radius=_radius,
-                outline_color=palette['card_current_outline'],
-                outline_width=4
+            center_font = ('Arial', self.fs(84, 40), 'bold')
+            center_font_obj = tkfont.Font(font=center_font)
+            center_w = center_font_obj.measure(center_text)
+            center_h = center_font_obj.metrics('linespace')
+            center_pad_x = self.us(32, 16)
+            center_pad_y = self.us(18, 9)
+            center_box_w = center_w + (center_pad_x * 2)
+            center_box_h = center_h + (center_pad_y * 2)
+            center_box_x = (width - center_box_w) / 2
+            center_box_y = height - self.us(210, 112) - center_box_h
+            center_box_id = self.draw_rounded_rectangle(
+                center_box_x, center_box_y,
+                center_box_w, center_box_h,
+                self.us(24, 12),
+                fill='white', outline='#e0e0e0', outline_width=2
             )
+            center_id = self.canvas.create_text(
+                center_box_x + center_pad_x,
+                center_box_y + center_pad_y,
+                text=center_text,
+                font=center_font,
+                fill='#d4af37',
+                anchor='nw'
+            )
+            self._athan_extra_ids.extend([center_box_id, center_id])
+            self.athan_callout_text_id = center_id
 
-        def draw_alert_text():
-            """Draw prayer-name / Arabic name / ATHAN / NOW text with shadow."""
-            prayer_label_raw = str(prayer).strip().upper()
-            if prayer_label_raw in ('DUHR', 'DHUHR', 'ZUHR'):
-                prayer_label = 'DHUHR'
-            else:
-                prayer_label = prayer_label_raw
+            time_font_obj = tkfont.Font(font=time_font)
+            time_w = time_font_obj.measure(current_time_text)
+            time_h = time_font_obj.metrics('linespace')
+            time_pad_x = self.us(22, 10)
+            time_pad_y = self.us(12, 6)
+            left_margin = self.us(24, 12)
+            bottom_margin = self.us(22, 10)
+            time_box_w = time_w + (time_pad_x * 2)
+            time_box_h = time_h + (time_pad_y * 2)
+            time_box_x = left_margin
+            time_box_y = height - bottom_margin - time_box_h
+            time_box_id = self.draw_rounded_rectangle(
+                time_box_x, time_box_y,
+                time_box_w, time_box_h,
+                self.us(22, 11),
+                fill='white', outline='#c6d2e3', outline_width=2
+            )
+            self._athan_overlay_time_text_id = self.canvas.create_text(
+                time_box_x + time_pad_x,
+                time_box_y + time_pad_y,
+                text=current_time_text,
+                font=time_font,
+                fill='#1a3a5f',
+                anchor='nw'
+            )
+            self._athan_extra_ids.extend([time_box_id, self._athan_overlay_time_text_id])
 
-            arabic_map = {
-                'FAJR': '\u0627\u0644\u0641\u062c\u0631',
-                'DHUHR': '\u0627\u0644\u0638\u0647\u0631',
-                'ASR': '\u0627\u0644\u0639\u0635\u0631',
-                'MAGHRIB': '\u0627\u0644\u0645\u063a\u0631\u0628',
-                'ISHA': '\u0627\u0644\u0639\u0634\u0627\u0621',
-                'JUMAA': '\u0627\u0644\u062c\u0645\u0639\u0629',
-                'JUMAH': '\u0627\u0644\u062c\u0645\u0639\u0629',
-                'SUNRISE': '\u0627\u0644\u0634\u0631\u0648\u0642',
-            }
-            arabic_name = arabic_map.get(prayer_label, '')
+            right_font_obj = tkfont.Font(font=right_font)
+            right_w = right_font_obj.measure(right_line_text)
+            right_h = right_font_obj.metrics('linespace')
+            right_pad_x = self.us(20, 10)
+            right_pad_y = self.us(10, 5)
+            right_box_w = right_w + (right_pad_x * 2)
+            right_box_h = right_h + (right_pad_y * 2)
+            right_box_x = width - left_margin - right_box_w
+            right_box_y = height - bottom_margin - right_box_h
+            right_box_id = self.draw_rounded_rectangle(
+                right_box_x, right_box_y,
+                right_box_w, right_box_h,
+                self.us(22, 11),
+                fill='white', outline='#c6d2e3', outline_width=2
+            )
+            self._athan_overlay_iqamah_text_id = self.canvas.create_text(
+                right_box_x + right_pad_x,
+                right_box_y + right_pad_y,
+                text=right_line_text,
+                font=right_font,
+                fill='#2E7D32',
+                anchor='nw'
+            )
+            self._athan_extra_ids.extend([right_box_id, self._athan_overlay_iqamah_text_id])
 
-            # Match the prayer-name size used by the underlying prayer box layout.
-            # Table row cards use the smaller salah name size; full cards use larger.
-            is_table_row = int(_radius) == 0
-            prayer_name_size = self.fs(30, 15) if is_table_row else self.fs(42, 21)
-            line_gap = self.fs(60, 30)
+            self._athan_overlay_signature = signature
+        else:
+            try:
+                self.canvas.itemconfig(self.athan_callout_text_id, text=center_text)
+            except:
+                pass
+            try:
+                self.canvas.itemconfig(self._athan_overlay_time_text_id, text=current_time_text)
+            except:
+                pass
+            try:
+                self.canvas.itemconfig(self._athan_overlay_iqamah_text_id, text=right_line_text)
+            except:
+                pass
 
-            if is_table_row or not arabic_name:
-                # Compact layout: 3 lines, no Arabic (not enough vertical space)
-                specs = [
-                    (prayer_label, prayer_name_size, '#ffffff', '#000000', -1.30, 'Arial'),
-                    ('ATHAN',      self.fs(40, 20),  '#ffd700', '#000000',  0.00, 'Arial'),
-                    ('NOW',        self.fs(36, 18),  '#ffd700', '#000000',  1.15, 'Arial'),
-                ]
-            else:
-                # Full card layout: 4 lines with Arabic name between English and ATHAN
-                specs = [
-                    (prayer_label, prayer_name_size,  '#ffffff', '#000000', -1.50, 'Arial'),
-                    (arabic_name,  prayer_name_size,  '#c9f0ff', '#000000', -0.50, 'Traditional Arabic'),
-                    ('ATHAN',      self.fs(40, 20),    '#ffd700', '#000000',  0.40, 'Arial'),
-                    ('NOW',        self.fs(36, 18),    '#ffd700', '#000000',  1.40, 'Arial'),
-                ]
-
-            for i, (txt, sz, fg, shadow_col, off_mult, font_family) in enumerate(specs):
-                oy = cy + line_gap * off_mult
-                # drop shadow
-                sid = self.canvas.create_text(
-                    cx + 2, oy + 2, text=txt,
-                    font=(font_family, sz, 'bold'), fill=shadow_col
-                )
-                self._athan_extra_ids.append(sid)
-                # main text
-                tid = self.canvas.create_text(
-                    cx, oy, text=txt,
-                    font=(font_family, sz, 'bold'), fill=fg
-                )
-                if i == 0:
-                    self.athan_callout_text_id = tid
-                else:
-                    self._athan_extra_ids.append(tid)
-
-        # ── render the correct phase ──────────────────────────────────────
-        if cycle_pos < SWEEP:
-            t = cycle_pos / SWEEP                     # 0→1
-            draw_alert_mask()
-            draw_shine_strip(t)
-            if t > 0.55:
-                draw_alert_text()                      # text appears toward end of sweep
-
-        elif cycle_pos < SHOW_END:
-            draw_alert_mask()
-            draw_alert_text()
-
-        elif cycle_pos < FADE_OUT_END:
-            t = (cycle_pos - SHOW_END) / (FADE_OUT_END - SHOW_END)   # 0→1
-            draw_alert_mask()
-            if t < 0.45:
-                draw_alert_text()                      # text vanishes as sweep begins
-            draw_shine_strip(t)
-
-        # else: hidden phase – no overlay drawn
-
-        # ── raise all new items to front ─────────────────────────────────
         for item_id in self._athan_extra_ids:
             try:
                 self.canvas.tag_raise(item_id)
             except:
                 pass
-        if self.athan_callout_box_id:
-            try:
-                self.canvas.tag_raise(self.athan_callout_box_id)
-                for item_id in self._athan_extra_ids:
-                    self.canvas.tag_raise(item_id)
-            except:
-                pass
-        if self.athan_callout_text_id:
-            try:
-                self.canvas.tag_raise(self.athan_callout_text_id)
-            except:
-                pass
 
     def schedule_athan_shine_animation(self):
-        """30 fps animation loop for the athan shine/alert effect."""
+        """Update athan overlay while athan notification window is active."""
         if not getattr(self, '_athan_shine_running', False):
             return
         if not self.athan_callout_prayer:
@@ -3004,12 +3090,11 @@ class IslamicBackground:
             return
         try:
             elapsed = (datetime.now() - self._athan_shine_cycle_start).total_seconds()
-            cycle_pos = elapsed % 4.0
-            self._draw_athan_shine_frame(cycle_pos)
+            self._draw_athan_shine_frame(elapsed)
         except Exception as e:
             self._log(f"ERROR in athan shine: {e}")
         try:
-            self.root.after(33, self.schedule_athan_shine_animation)
+            self.root.after(1000, self.schedule_athan_shine_animation)
         except:
             pass
 

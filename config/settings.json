@@ -15,7 +15,7 @@
   "background_override_date": "2026-04-17",
   "ticker_enabled": "yes",
   "ticker_speed": 5,
-  "athancalloutduran": 25,
+  "athancalloutduran": 30,
   "athanblinkingduration": 15,
   "arabicchangeevery": 30,
   "arabicnameduration": 5,
