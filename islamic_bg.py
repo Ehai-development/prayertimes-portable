@@ -131,6 +131,15 @@ class IslamicBackground:
         self.next_prayer_static_width = None
         self._next_prayer_last_text_parts = None
         self._next_prayer_last_widths = (0, 0, 0, 0)
+        # Next-prayer slide transition state (clean rewrite)
+        self._np_rtl = False           # currently displayed RTL mode
+        self._np_anim_active = False   # animation in progress
+        self._np_anim_start_mono = 0.0 # time.monotonic() when animation started
+        self._np_anim_duration = 0.65  # seconds
+        self._np_old_data = None       # data being exited {prefix,name,in_,countdown,rtl}
+        self._np_new_data = None       # data being entered
+        self._np_anim_ticker_id = None # after() ID for animation ticker
+        self._np_initialized = False   # committed mode initialized from first live sample
         self.build_info_text_id = None
         self.build_info_text = self.get_build_info_text()
         self.last_rendered_current_prayer = None
@@ -200,6 +209,11 @@ class IslamicBackground:
         self._post_overlay_text_transition_after_id = None
         self._post_overlay_text_transition_temp_ids = []
         self._post_overlay_text_transition_payload = None
+        self.iqamah_overlay_transition_duration_ms = 720
+        self.iqamah_overlay_transition_tick_ms = 20
+        self.post_overlay_transition_duration_ms = 860
+        self.post_overlay_transition_tick_ms = 20
+        self.post_overlay_transition_travel = self.us(12, 6)
         
         # Tracking for announcement ticker - initialize empty
         self.announcement_text_id = None
@@ -1245,7 +1259,7 @@ class IslamicBackground:
         self.config['arabicchangeevery'] = arabic_change_every_seconds
 
         try:
-            arabic_name_duration_seconds = int(self.config.get('arabicnameduration', 5))
+            arabic_name_duration_seconds = int(self.config.get('arabicnameduration', 10))
             arabic_name_duration_seconds = max(0, arabic_name_duration_seconds)
         except:
             arabic_name_duration_seconds = 5
@@ -1539,13 +1553,14 @@ class IslamicBackground:
             location_part = ''
 
         cx = width // 2
-        top_y = height - self.us(170, 85)
+        label_shift_up = self.us(28, 14) if ('iqamah_overlay' in str(tags)) else 0
+        top_y = height - self.us(170, 85) - label_shift_up
 
         # Masjid name - large italic serif
         name_font = ('Georgia', self.fs(48, 24), 'bold italic')
         self.draw_outlined_text(
             cx, top_y, name_part,
-            font=name_font, fill='white', outline='black', outline_px=2,
+            font=name_font, fill='white', outline='black', outline_px=3,
             anchor='center', tags=tags
         )
 
@@ -1580,7 +1595,7 @@ class IslamicBackground:
             # Location text
             self.draw_outlined_text(
                 cx, loc_y, loc_text,
-                font=loc_font, fill='white', outline='black', outline_px=1,
+                font=loc_font, fill='white', outline='black', outline_px=2,
                 anchor='center', tags=tags
             )
 
@@ -3117,7 +3132,97 @@ class IslamicBackground:
     def schedule_countdown_update(self):
         """Schedule the countdown update to run every second"""
         self.update_countdown()
-    
+
+    def _np_ease(self, t):
+        """Smooth cubic ease-in-out."""
+        t = max(0.0, min(1.0, t))
+        return t * t * (3.0 - 2.0 * t)
+
+    def _np_get_draw_data(self):
+        """Return (data_dict_or_None, shift_factor) for current animation frame.
+
+        shift_factor is multiplied by a safe in-panel pixel travel distance in draw code.
+        Returns (None, 0.0) when not animating.
+        """
+        if not self._np_anim_active:
+            return None, 0.0
+        elapsed = time.monotonic() - self._np_anim_start_mono
+        progress = min(1.0, elapsed / max(0.001, self._np_anim_duration))
+        if progress < 0.5:
+            # Phase 1: old text exits left
+            phase = progress / 0.5
+            shift_factor = -self._np_ease(phase)  # 0 -> -1
+            return self._np_old_data, shift_factor
+        else:
+            # Phase 2: new text enters from right
+            phase = (progress - 0.5) / 0.5
+            shift_factor = 1.0 - self._np_ease(phase)  # +1 -> 0
+            return self._np_new_data, shift_factor
+
+    def _np_start(self, old_data, new_data):
+        """Start next-prayer language slide animation."""
+        if self._np_anim_ticker_id is not None:
+            try:
+                self.root.after_cancel(self._np_anim_ticker_id)
+            except:
+                pass
+            self._np_anim_ticker_id = None
+        self._np_old_data = dict(old_data)
+        self._np_new_data = dict(new_data)
+        self._np_anim_start_mono = time.monotonic()
+        self._np_anim_active = True
+        self._np_tick()
+
+    def _np_tick(self):
+        """Advance next-prayer animation: trigger full redraw each frame."""
+        self._np_anim_ticker_id = None
+        if not self._np_anim_active:
+            return
+        elapsed = time.monotonic() - self._np_anim_start_mono
+        if elapsed >= self._np_anim_duration:
+            self._np_anim_active = False
+            self._np_rtl = bool(self._np_new_data.get('rtl', False))
+            self.redraw_full_display()
+            return
+        self.redraw_full_display()
+        self._np_anim_ticker_id = self.root.after(40, self._np_tick)
+
+    def _compute_next_prayer_line_layout(self, prefix_text, name_text, in_text, countdown_text, rtl_mode):
+        """Measure next-prayer segments and return stable panel/segment positions."""
+        segment_gap = self.us(18, 9)
+        prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
+        name_width = self.next_prayer_line_font.measure(name_text)
+        in_width = self.next_prayer_line_font.measure(in_text)
+        countdown_width = self.next_prayer_countdown_fixed_width
+        total_width = prefix_width + name_width + in_width + countdown_width + (segment_gap * 3)
+
+        left_x = self.next_prayer_line_x - (total_width / 2)
+        right_x = self.next_prayer_line_x + (total_width / 2)
+        if rtl_mode:
+            coords = {
+                'prefix': (right_x, 'e'),
+                'name': (right_x - prefix_width - segment_gap, 'e'),
+                'in': (right_x - prefix_width - segment_gap - name_width - segment_gap, 'e'),
+                'countdown': (right_x - prefix_width - segment_gap - name_width - segment_gap - in_width - segment_gap, 'e'),
+            }
+        else:
+            coords = {
+                'prefix': (left_x, 'w'),
+                'name': (left_x + prefix_width + segment_gap, 'w'),
+                'in': (left_x + prefix_width + segment_gap + name_width + segment_gap, 'w'),
+                'countdown': (left_x + prefix_width + segment_gap + name_width + segment_gap + in_width + segment_gap, 'w'),
+            }
+
+        required_panel_width = max(260, total_width + (self.next_prayer_panel_padding_x * 2))
+        if self.next_prayer_max_panel_width:
+            required_panel_width = min(required_panel_width, self.next_prayer_max_panel_width)
+
+        return {
+            'total_width': total_width,
+            'required_panel_width': required_panel_width,
+            'coords': coords,
+        }
+
     def update_countdown(self):
         """Update the countdown text every second"""
         _t0 = datetime.now() if ENABLE_PERF_TRACE else None
@@ -3167,99 +3272,36 @@ class IslamicBackground:
                     countdown_text = display_data['countdown_text']
                     rtl_mode = bool(display_data.get('rtl', False))
 
-                    self.canvas.itemconfig(self.next_prayer_prefix_text_id, text=prefix_text, fill='black')
-                    self.canvas.itemconfig(self.next_prayer_name_text_id, text=name_text, fill='#d32f2f')
-                    self.canvas.itemconfig(self.next_prayer_in_text_id, text=in_text, fill='black')
-                    self.canvas.itemconfig(self.countdown_text_id, text=countdown_text, fill='#2E7D32')
-
-                    if self.next_prayer_line_x is not None and self.next_prayer_line_y is not None:
-                        text_parts = (prefix_text, name_text, in_text, rtl_mode)
-                        
-                        # For RTL Arabic, keep segments separate but enforce a visible gap.
-                        if rtl_mode:
-                            rtl_gap = self.us(18, 9)
-                            if text_parts != self._next_prayer_last_text_parts:
-                                prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
-                                name_width = self.next_prayer_line_font.measure(name_text)
-                                in_width = self.next_prayer_line_font.measure(in_text)
-                                countdown_width = self.next_prayer_countdown_fixed_width
-                                self._next_prayer_last_text_parts = text_parts
-                                self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
-                                static_total_width = prefix_width + name_width + in_width + countdown_width + (rtl_gap * 3)
-                                unconstrained_static_width = max(260, static_total_width + (self.next_prayer_panel_padding_x * 2))
-                                if self.next_prayer_max_panel_width:
-                                    self.next_prayer_static_width = min(unconstrained_static_width, self.next_prayer_max_panel_width)
-                                else:
-                                    self.next_prayer_static_width = unconstrained_static_width
-                            else:
-                                prefix_width, name_width, in_width, countdown_width = self._next_prayer_last_widths
-                            total_width = prefix_width + name_width + in_width + countdown_width + (rtl_gap * 3)
-                        else:
-                            # For LTR English, keep separate measurements as before
-                            if text_parts != self._next_prayer_last_text_parts:
-                                prefix_width = self.next_prayer_prefix_font.measure(prefix_text)
-                                name_width = self.next_prayer_line_font.measure(name_text)
-                                in_width = self.next_prayer_line_font.measure(in_text)
-                                countdown_width = self.next_prayer_countdown_fixed_width
-                                self._next_prayer_last_text_parts = text_parts
-                                self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
-                                static_total_width = prefix_width + name_width + in_width + countdown_width
-                                unconstrained_static_width = max(260, static_total_width + (self.next_prayer_panel_padding_x * 2))
-                                if self.next_prayer_max_panel_width:
-                                    self.next_prayer_static_width = min(unconstrained_static_width, self.next_prayer_max_panel_width)
-                                else:
-                                    self.next_prayer_static_width = unconstrained_static_width
-                            else:
-                                prefix_width, name_width, in_width, countdown_width = self._next_prayer_last_widths
-                            total_width = prefix_width + name_width + in_width + countdown_width
-
-                        left_x = self.next_prayer_line_x - (total_width / 2)
-                        right_x = self.next_prayer_line_x + (total_width / 2)
-
-                        # Keep panel width stable during per-second countdown ticks.
-                        base_panel_width = self.next_prayer_static_width if self.next_prayer_static_width else max(260, total_width + (self.next_prayer_panel_padding_x * 2))
-                        if self.next_prayer_max_panel_width:
-                            panel_width = min(base_panel_width, self.next_prayer_max_panel_width)
-                        else:
-                            panel_width = base_panel_width
-                        panel_x1 = self.next_prayer_line_x - (panel_width / 2)
-                        panel_y1 = self.next_prayer_line_y - (self.next_prayer_panel_height / 2)
-                        self.next_prayer_panel_bounds = (panel_x1, panel_y1, panel_width, self.next_prayer_panel_height)
-
-                        if self.next_prayer_panel_width != panel_width:
-                            if self.next_prayer_panel_id:
-                                try:
-                                    self.canvas.delete(self.next_prayer_panel_id)
-                                except:
-                                    pass
-
-                            self.next_prayer_panel_id = self.draw_rounded_rectangle(
-                                panel_x1, panel_y1, panel_width, self.next_prayer_panel_height, self.next_prayer_panel_radius,
-                                fill='white', outline='#2a5a8f', outline_width=3
-                            )
-                            self.next_prayer_panel_width = panel_width
-                            self.canvas.tag_lower(self.next_prayer_panel_id, self.next_prayer_prefix_text_id)
-
-                        if rtl_mode:
-                            rtl_gap = self.us(18, 9)
-                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, state='normal', anchor='e')
-                            self.canvas.itemconfig(self.next_prayer_name_text_id, state='normal', anchor='e')
-                            self.canvas.itemconfig(self.next_prayer_in_text_id, state='normal', anchor='e')
-                            self.canvas.itemconfig(self.countdown_text_id, state='normal', anchor='e')
-                            self.canvas.coords(self.next_prayer_prefix_text_id, right_x, self.next_prayer_line_y)
-                            self.canvas.coords(self.next_prayer_name_text_id, right_x - prefix_width - rtl_gap, self.next_prayer_line_y)
-                            self.canvas.coords(self.next_prayer_in_text_id, right_x - prefix_width - rtl_gap - name_width - rtl_gap, self.next_prayer_line_y)
-                            self.canvas.coords(self.countdown_text_id, right_x - prefix_width - rtl_gap - name_width - rtl_gap - in_width - rtl_gap, self.next_prayer_line_y)
-                        else:
-                            # For English LTR: use separate positioned text elements
-                            self.canvas.itemconfig(self.next_prayer_prefix_text_id, state='normal', anchor='w')
-                            self.canvas.itemconfig(self.next_prayer_name_text_id, state='normal', anchor='w')
-                            self.canvas.itemconfig(self.next_prayer_in_text_id, state='normal', anchor='w')
-                            self.canvas.itemconfig(self.countdown_text_id, state='normal', anchor='w')
-                            self.canvas.coords(self.next_prayer_prefix_text_id, left_x, self.next_prayer_line_y)
-                            self.canvas.coords(self.next_prayer_name_text_id, left_x + prefix_width, self.next_prayer_line_y)
-                            self.canvas.coords(self.next_prayer_in_text_id, left_x + prefix_width + name_width, self.next_prayer_line_y)
-                            self.canvas.coords(self.countdown_text_id, left_x + prefix_width + name_width + in_width, self.next_prayer_line_y)
+                    if self._np_anim_active:
+                        # Keep live countdown current in the animation target
+                        if self._np_new_data is not None:
+                            self._np_new_data['countdown'] = countdown_text
+                    elif rtl_mode != self._np_rtl:
+                        # RTL mode changed — build deterministic old/new lines to prevent flash frames.
+                        old_display = self.get_next_line_display_data(prayers_data, force_show_arabic=(not rtl_mode))
+                        new_display = self.get_next_line_display_data(prayers_data, force_show_arabic=rtl_mode)
+                        old_data = {
+                            'prefix': old_display.get('prefix_text', ''),
+                            'name': old_display.get('name_text', ''),
+                            'in_': old_display.get('in_text', ''),
+                            'countdown': old_display.get('countdown_text', countdown_text),
+                            'rtl': bool(old_display.get('rtl', (not rtl_mode))),
+                        }
+                        new_data = {
+                            'prefix': new_display.get('prefix_text', prefix_text),
+                            'name': new_display.get('name_text', name_text),
+                            'in_': new_display.get('in_text', in_text),
+                            'countdown': new_display.get('countdown_text', countdown_text),
+                            'rtl': bool(new_display.get('rtl', rtl_mode)),
+                        }
+                        self._np_start(old_data, new_data)
+                    else:
+                        # Same language — just update the live countdown text directly
+                        self._np_rtl = rtl_mode
+                        try:
+                            self.canvas.itemconfig(self.countdown_text_id, text=countdown_text)
+                        except:
+                            pass
                 except:
                     pass
         except Exception as e:
@@ -3328,9 +3370,17 @@ class IslamicBackground:
                 iqamah_dt = datetime.combine(mocked_date, iqamah_time)
                 post_end_dt = iqamah_dt + timedelta(seconds=self.iqamah_post_duration_seconds)
 
+                # Friday khutbah countdown lead time is configurable (default: 2 minutes).
+                try:
+                    friday_khutbah_minutes = int(self.config.get('fridaykhutbahcountdown', 2))
+                except:
+                    friday_khutbah_minutes = 2
+                friday_khutbah_minutes = max(1, friday_khutbah_minutes)
+                friday_window_seconds = friday_khutbah_minutes * 60
+
                 if prayer == 'Duhr' and is_friday:
                     time_until_jummah = (iqamah_dt - now_dt).total_seconds()
-                    if 0 < time_until_jummah <= 120:
+                    if 0 < time_until_jummah <= friday_window_seconds:
                         pre_countdown_prayer = display_prayer
                         self.current_prayer_iqamah_time = iqamah_time
                         break
@@ -3349,8 +3399,11 @@ class IslamicBackground:
                 iqamah_dt = datetime.combine(mocked_date, self.current_prayer_iqamah_time)
                 time_diff = (iqamah_dt - now_dt).total_seconds()
 
-                # Show countdown overlay only in the last 2 minutes before iqamah
-                if 0 < time_diff <= 120:
+                # Show countdown overlay window:
+                # - Friday Jummah khutbah uses configurable lead minutes
+                # - Other prayers use the existing 2-minute window
+                overlay_window_seconds = friday_window_seconds if (is_friday and self.current_prayer_name == 'Jummah') else 120
+                if 0 < time_diff <= overlay_window_seconds:
                     if (not self.iqamah_overlay_visible
                         or self.iqamah_overlay_mode != 'countdown'):
                         self.iqamah_overlay_ids = []
@@ -3404,6 +3457,12 @@ class IslamicBackground:
     def show_iqamah_overlay(self):
         """Show the full-screen Iqamah countdown overlay"""
         try:
+            # Keep day-before prayer-change ribbon hidden while overlay is active.
+            try:
+                self.canvas.itemconfig('prayer_change_ribbon', state='hidden')
+            except:
+                pass
+
             # Cancel any existing toggle timer before redrawing
             toggle_id = getattr(self, '_iqamah_countdown_toggle_id', None)
             if toggle_id:
@@ -3462,7 +3521,10 @@ class IslamicBackground:
             change_notice_y = countdown_y + self.us(175, 95)
             notice_y = change_notice_y + self.us(90, 50)
             icon_y = notice_y + self.us(200, 112)
+            icon_x = width / 2
             is_friday_khutbah = (self.current_prayer_name == 'Jummah' and self.get_current_date().weekday() == 4)
+            friday_hadith_text = ''
+            friday_hadith_text_en = ''
             prayer_line_text = f"{self.current_prayer_name.upper()} iqamah in"
             instruction_line_text = 'Please put your cell phone on silent mode'
             instruction_font_size = self.fs(68, 32)
@@ -3472,6 +3534,9 @@ class IslamicBackground:
                 prayer_line_text = 'Jummah khutbah in'
                 instruction_line_text = 'Talking is forbidden during Khutbahs'
                 instruction_font_size = self.fs(74, 34)
+                friday_hadith_text = 'عن أنس رضي الله عنه أن الرسول صلى الله عليه وسلم قال: إذا قلت لصاحبك أنصت والإمام يخطب يوم الجمعة فقد لغوت'
+                friday_hadith_text_en = "Anas (RA) reported that the Messenger of Allah (PBUH) said: If you tell your companion 'Be quiet' while the Imam is delivering the Friday khutbah, you have spoken in vain."
+                icon_y = icon_y - self.us(26, 14)
 
             # Prayer line: PRAYERNAME IQAMAH IN (green with white outline)
             prayer_text = self.draw_outlined_text(
@@ -3535,17 +3600,132 @@ class IslamicBackground:
                 self.iqamah_overlay_ids.append(change_notice_right)
 
             # Cell phone notice (black and bigger)
-            instruction_text = self.canvas.create_text(
-                width / 2, notice_y,
-                text=instruction_line_text,
-                font=('Arial', instruction_font_size, 'bold'),
-                fill='black',
-                tags=('iqamah_overlay', 'iqamah_instruction_text')
-            )
-            self.iqamah_overlay_ids.append(instruction_text)
+            instruction_x = width / 2
+            instruction_y = notice_y
+            instruction_anchor = 'center'
+            instruction_font = ('Arial', instruction_font_size, 'bold')
+            if is_friday_khutbah:
+                # Friday: pin warning in its own wide white box from time box edge to near screen edge.
+                warning_left = time_bg_x + (_tw + time_pad_x * 2) + self.us(18, 10)
+                warning_right = width - self.us(20, 10)
+                warning_y = time_bg_y
+                warning_h = _th + time_pad_y * 2
+                if warning_right > warning_left + self.us(180, 90):
+                    warning_text = instruction_line_text
+                    try:
+                        change_every_seconds = int(self.config.get('arabicchangeevery', 30))
+                        change_every_seconds = max(1, change_every_seconds)
+                    except:
+                        change_every_seconds = 30
+                    try:
+                        arabic_duration_seconds = int(self.config.get('arabicnameduration', 10))
+                        arabic_duration_seconds = max(0, arabic_duration_seconds)
+                    except:
+                        arabic_duration_seconds = 5
+                    arabic_duration_seconds = min(arabic_duration_seconds, change_every_seconds)
+                    now_dt = datetime.combine(self.get_current_date(), self.get_current_time())
+                    seconds_into_cycle = int(now_dt.timestamp()) % change_every_seconds
+                    if arabic_duration_seconds > 0 and seconds_into_cycle < arabic_duration_seconds:
+                        warning_text = 'الكلام محرم اثناء الخطبتين'
+
+                    warning_bg_id = self.draw_rounded_rectangle(
+                        warning_left,
+                        warning_y,
+                        warning_right - warning_left,
+                        warning_h,
+                        self.us(20, 10),
+                        fill='white', outline='#cccccc', outline_width=1,
+                        tags=('iqamah_overlay', 'iqamah_friday_warning_bg')
+                    )
+                    self.iqamah_overlay_ids.append(warning_bg_id)
+
+                    friday_warning_id = self.canvas.create_text(
+                        (warning_left + warning_right) / 2,
+                        warning_y + (warning_h / 2),
+                        text=warning_text,
+                        font=('Arial', self.fs(42, 20), 'bold'),
+                        fill='black',
+                        anchor='center',
+                        tags=('iqamah_overlay', 'iqamah_friday_warning_text')
+                    )
+                    self.iqamah_overlay_ids.append(friday_warning_id)
+
+                    # Move no-phone icon to the right, above the Friday warning box.
+                    icon_x = warning_right - self.us(120, 62)
+                    icon_y = warning_y - self.us(94, 50)
+            else:
+                instruction_text = self.canvas.create_text(
+                    instruction_x, instruction_y,
+                    text=instruction_line_text,
+                    font=instruction_font,
+                    fill='black',
+                    anchor=instruction_anchor,
+                    tags=('iqamah_overlay', 'iqamah_instruction_text')
+                )
+                self.iqamah_overlay_ids.append(instruction_text)
+
+            if is_friday_khutbah and friday_hadith_text:
+                # Keep both languages visible together: Arabic on top, English translation below.
+                hadith_text = f'{friday_hadith_text}\n{friday_hadith_text_en}'
+                hadith_center_y = countdown_y + self.us(348, 178)
+                hadith_text_id = self.draw_outlined_text(
+                    width / 2,
+                    hadith_center_y,
+                    text=hadith_text,
+                    font=('Arial', self.fs(54, 26), 'bold'),
+                    fill='black',
+                    outline='white',
+                    outline_px=self.us(3, 2),
+                    width=self.us(1750, 920),
+                    justify='center',
+                    anchor='center',
+                    tags=('iqamah_overlay', 'iqamah_khutbah_hadith_text')
+                )
+                self.iqamah_overlay_ids.append(hadith_text_id)
+
+                # Keep brackets around the Arabic line only.
+                hadith_bbox = self.canvas.bbox(hadith_text_id)
+                if hadith_bbox:
+                    _bx1, by1, _bx2, by2 = hadith_bbox
+                    arabic_line_height = max(1, tkfont.Font(font=('Arial', self.fs(54, 26), 'bold')).metrics('linespace'))
+                    first_line_y = by1 + (arabic_line_height / 2)
+                    second_line_y = min(by2 - (arabic_line_height / 2), first_line_y + arabic_line_height)
+                    arabic_font = ('Arial', self.fs(54, 26), 'bold')
+                    arabic_width = tkfont.Font(font=arabic_font).measure(friday_hadith_text)
+                    arabic_width = min(arabic_width, self.us(1750, 920))
+                    arabic_center_x = width / 2
+
+                    bracket_gap = self.us(1, 0)
+                    bracket_font = ('Arial', self.fs(62, 28), 'bold')
+
+                    right_bracket_id = self.draw_outlined_text(
+                        arabic_center_x + (arabic_width / 2) + bracket_gap,
+                        first_line_y,
+                        text='﴿',
+                        font=bracket_font,
+                        fill='black',
+                        outline='white',
+                        outline_px=self.us(3, 2),
+                        anchor='w',
+                        tags=('iqamah_overlay', 'iqamah_khutbah_hadith_text')
+                    )
+                    self.iqamah_overlay_ids.append(right_bracket_id)
+
+                    left_bracket_id = self.draw_outlined_text(
+                        arabic_center_x - (arabic_width / 2) - bracket_gap,
+                        second_line_y,
+                        text='﴾',
+                        font=bracket_font,
+                        fill='black',
+                        outline='white',
+                        outline_px=self.us(3, 2),
+                        anchor='e',
+                        tags=('iqamah_overlay', 'iqamah_khutbah_hadith_text')
+                    )
+                    self.iqamah_overlay_ids.append(left_bracket_id)
 
             # Larger centered no-phone icon beneath the notice
-            icon_ids = self.draw_no_phone_icon(width / 2, icon_y, size=self.us(240, 130), tags='iqamah_overlay')
+            icon_ids = self.draw_no_phone_icon(icon_x, icon_y, size=self.us(240, 130), tags='iqamah_overlay')
             
             # Raise overlay to top of canvas stacking order
             self.canvas.tag_raise('iqamah_overlay')
@@ -3557,7 +3737,19 @@ class IslamicBackground:
             self._iqamah_countdown_lang_english = True
             self._iqamah_countdown_is_friday = is_friday_khutbah
             self._iqamah_countdown_prayer_name = self.current_prayer_name
-            self._iqamah_countdown_toggle_id = self.root.after(10000, self._schedule_iqamah_countdown_text_toggle)
+            try:
+                change_every_seconds = int(self.config.get('arabicchangeevery', 30))
+                change_every_seconds = max(1, change_every_seconds)
+            except:
+                change_every_seconds = 30
+            try:
+                arabic_duration_seconds = int(self.config.get('arabicnameduration', 10))
+                arabic_duration_seconds = max(0, arabic_duration_seconds)
+            except:
+                arabic_duration_seconds = 5
+            arabic_duration_seconds = min(arabic_duration_seconds, change_every_seconds)
+            english_duration_seconds = max(1, change_every_seconds - arabic_duration_seconds)
+            self._iqamah_countdown_toggle_id = self.root.after(english_duration_seconds * 1000, self._schedule_iqamah_countdown_text_toggle)
 
         except Exception as e:
             self._log(f"ERROR in show_iqamah_overlay: {e}")
@@ -3567,6 +3759,12 @@ class IslamicBackground:
     def show_post_iqamah_overlay(self):
         """Show post-iqamah overlay for 3 minutes with ayah and prayer notice."""
         try:
+            # Keep day-before prayer-change ribbon hidden while overlay is active.
+            try:
+                self.canvas.itemconfig('prayer_change_ribbon', state='hidden')
+            except:
+                pass
+
             # Cancel any existing toggle timer before redrawing
             toggle_id = getattr(self, '_post_overlay_toggle_id', None)
             if toggle_id:
@@ -3684,6 +3882,26 @@ class IslamicBackground:
         if not self.iqamah_overlay_visible or self.iqamah_overlay_mode != 'countdown':
             self._iqamah_countdown_toggle_id = None
             return
+
+        try:
+            change_every_seconds = int(self.config.get('arabicchangeevery', 30))
+            change_every_seconds = max(1, change_every_seconds)
+        except:
+            change_every_seconds = 30
+        try:
+            arabic_duration_seconds = int(self.config.get('arabicnameduration', 10))
+            arabic_duration_seconds = max(0, arabic_duration_seconds)
+        except:
+            arabic_duration_seconds = 5
+        arabic_duration_seconds = min(arabic_duration_seconds, change_every_seconds)
+        english_duration_seconds = max(1, change_every_seconds - arabic_duration_seconds)
+
+        if arabic_duration_seconds <= 0:
+            # Setting disables Arabic phase; keep English and re-check cadence.
+            self._iqamah_countdown_lang_english = True
+            self._iqamah_countdown_toggle_id = self.root.after(change_every_seconds * 1000, self._schedule_iqamah_countdown_text_toggle)
+            return
+
         arabic_names = {
             'Fajr': 'الفجر', 'Duhr': 'الظهر', 'Dhuhr': 'الظهر',
             'Asr': 'العصر', 'Maghrib': 'المغرب', 'Isha': 'العشاء',
@@ -3703,14 +3921,22 @@ class IslamicBackground:
             arabic_name = arabic_names.get(prayer_name, prayer_name)
             if is_friday:
                 prayer_line = f'خطبة {arabic_name} بعد'
-                instr = 'يُمنع الكلام أثناء الخطبة'
+                instr = 'الكلام محرم اثناء الخطبتين'
             else:
                 prayer_line = f'إقامة {arabic_name} بعد'
                 instr = 'يرجى وضع هاتفك على الوضع الصامت'
         self._start_iqamah_countdown_text_transition(prayer_line, instr)
-        # English stays 10s, Arabic stays 5s
-        delay = 10000 if self._iqamah_countdown_lang_english else 5000
-        self._iqamah_countdown_toggle_id = self.root.after(delay, self._schedule_iqamah_countdown_text_toggle)
+
+        # Friday warning is rendered in its own box, so update it directly.
+        if is_friday:
+            for item_id in self.canvas.find_withtag('iqamah_friday_warning_text'):
+                try:
+                    self.canvas.itemconfig(item_id, text=instr)
+                except:
+                    pass
+
+        delay_seconds = english_duration_seconds if self._iqamah_countdown_lang_english else arabic_duration_seconds
+        self._iqamah_countdown_toggle_id = self.root.after(delay_seconds * 1000, self._schedule_iqamah_countdown_text_toggle)
 
     def _clear_iqamah_countdown_text_transition_artifacts(self):
         """Cancel in-progress iqamah countdown text transition and clear temporary items."""
@@ -3743,30 +3969,33 @@ class IslamicBackground:
 
         prayer_ids = list(self.canvas.find_withtag('iqamah_prayer_line_text'))
         instruction_ids = list(self.canvas.find_withtag('iqamah_instruction_text'))
-        if not prayer_ids or not instruction_ids:
+        if not prayer_ids:
             return
+        has_instruction = bool(instruction_ids)
 
         current_prayer_line = self.canvas.itemcget(prayer_ids[0], 'text')
-        current_instruction_line = self.canvas.itemcget(instruction_ids[0], 'text')
+        current_instruction_line = self.canvas.itemcget(instruction_ids[0], 'text') if has_instruction else ''
 
         if current_prayer_line == next_prayer_line and current_instruction_line == next_instruction_line:
             return
 
         prayer_bbox = self.canvas.bbox('iqamah_prayer_line_text')
-        instruction_bbox = self.canvas.bbox('iqamah_instruction_text')
-        if not prayer_bbox or not instruction_bbox:
+        instruction_bbox = self.canvas.bbox('iqamah_instruction_text') if has_instruction else None
+        if (not prayer_bbox) or (has_instruction and not instruction_bbox):
             for item_id in prayer_ids:
                 self.canvas.itemconfig(item_id, text=next_prayer_line)
-            for item_id in instruction_ids:
-                self.canvas.itemconfig(item_id, text=next_instruction_line)
+            if has_instruction:
+                for item_id in instruction_ids:
+                    self.canvas.itemconfig(item_id, text=next_instruction_line)
             return
 
         self._clear_iqamah_countdown_text_transition_artifacts()
 
         for item_id in prayer_ids:
             self.canvas.itemconfig(item_id, state='hidden')
-        for item_id in instruction_ids:
-            self.canvas.itemconfig(item_id, state='hidden')
+        if has_instruction:
+            for item_id in instruction_ids:
+                self.canvas.itemconfig(item_id, state='hidden')
 
         self._iqamah_countdown_text_transition_payload = {
             'prayer_old': current_prayer_line,
@@ -3775,8 +4004,9 @@ class IslamicBackground:
             'instruction_new': next_instruction_line,
             'prayer_x': (prayer_bbox[0] + prayer_bbox[2]) / 2,
             'prayer_y': (prayer_bbox[1] + prayer_bbox[3]) / 2,
-            'instruction_x': (instruction_bbox[0] + instruction_bbox[2]) / 2,
-            'instruction_y': (instruction_bbox[1] + instruction_bbox[3]) / 2,
+            'has_instruction': has_instruction,
+            'instruction_x': ((instruction_bbox[0] + instruction_bbox[2]) / 2) if has_instruction else 0,
+            'instruction_y': ((instruction_bbox[1] + instruction_bbox[3]) / 2) if has_instruction else 0,
             'progress': 0.0,
         }
         self._tick_iqamah_countdown_text_transition()
@@ -3797,12 +4027,13 @@ class IslamicBackground:
             pass
         self._iqamah_countdown_text_transition_temp_ids = []
 
-        step = self.salah_name_transition_tick_ms / max(1, self.salah_name_transition_duration_ms)
+        step = self.post_overlay_transition_tick_ms / max(1, self.post_overlay_transition_duration_ms)
         payload['progress'] = min(1.0, payload['progress'] + step)
         progress = payload['progress']
         eased = progress * progress * (3.0 - (2.0 * progress))
 
-        travel = self.us(24, 12)
+        travel = self.post_overlay_transition_travel
+        has_instruction = payload.get('has_instruction', True)
         if eased < 0.5:
             # Phase 1: move old language out (no overlap with new text).
             phase = eased / 0.5
@@ -3814,17 +4045,16 @@ class IslamicBackground:
                 fill='#2E7D32',
                 tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
             )
-            instruction_out_id = self.canvas.create_text(
-                payload['instruction_x'], payload['instruction_y'] + outgoing_shift,
-                text=payload['instruction_old'],
-                font=('Arial', self.fs(68, 32), 'bold'),
-                fill='black',
-                tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
-            )
-            self._iqamah_countdown_text_transition_temp_ids.extend([
-                prayer_out_id,
-                instruction_out_id,
-            ])
+            self._iqamah_countdown_text_transition_temp_ids.append(prayer_out_id)
+            if has_instruction:
+                instruction_out_id = self.canvas.create_text(
+                    payload['instruction_x'], payload['instruction_y'] + outgoing_shift,
+                    text=payload['instruction_old'],
+                    font=('Arial', self.fs(68, 32), 'bold'),
+                    fill='black',
+                    tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
+                )
+                self._iqamah_countdown_text_transition_temp_ids.append(instruction_out_id)
         else:
             # Phase 2: move new language in after old language is gone.
             phase = (eased - 0.5) / 0.5
@@ -3836,29 +4066,29 @@ class IslamicBackground:
                 fill='#2E7D32',
                 tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
             )
-            instruction_in_id = self.canvas.create_text(
-                payload['instruction_x'], payload['instruction_y'] + incoming_shift,
-                text=payload['instruction_new'],
-                font=('Arial', self.fs(68, 32), 'bold'),
-                fill='black',
-                tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
-            )
-            self._iqamah_countdown_text_transition_temp_ids.extend([
-                prayer_in_id,
-                instruction_in_id,
-            ])
+            self._iqamah_countdown_text_transition_temp_ids.append(prayer_in_id)
+            if has_instruction:
+                instruction_in_id = self.canvas.create_text(
+                    payload['instruction_x'], payload['instruction_y'] + incoming_shift,
+                    text=payload['instruction_new'],
+                    font=('Arial', self.fs(68, 32), 'bold'),
+                    fill='black',
+                    tags=('iqamah_overlay', 'iqamah_countdown_lang_transition')
+                )
+                self._iqamah_countdown_text_transition_temp_ids.append(instruction_in_id)
         self.canvas.tag_raise('iqamah_overlay')
 
         if progress >= 1.0:
             for item_id in self.canvas.find_withtag('iqamah_prayer_line_text'):
                 self.canvas.itemconfig(item_id, text=payload['prayer_new'], state='normal')
-            for item_id in self.canvas.find_withtag('iqamah_instruction_text'):
-                self.canvas.itemconfig(item_id, text=payload['instruction_new'], state='normal')
+            if has_instruction:
+                for item_id in self.canvas.find_withtag('iqamah_instruction_text'):
+                    self.canvas.itemconfig(item_id, text=payload['instruction_new'], state='normal')
             self._clear_iqamah_countdown_text_transition_artifacts()
             return
 
         self._iqamah_countdown_text_transition_after_id = self.root.after(
-            self.salah_name_transition_tick_ms,
+            self.iqamah_overlay_transition_tick_ms,
             self._tick_iqamah_countdown_text_transition
         )
 
@@ -3962,12 +4192,12 @@ class IslamicBackground:
             pass
         self._post_overlay_text_transition_temp_ids = []
 
-        step = self.salah_name_transition_tick_ms / max(1, self.salah_name_transition_duration_ms)
+        step = self.iqamah_overlay_transition_tick_ms / max(1, self.iqamah_overlay_transition_duration_ms)
         payload['progress'] = min(1.0, payload['progress'] + step)
         progress = payload['progress']
         eased = progress * progress * (3.0 - (2.0 * progress))
 
-        travel = self.us(24, 12)
+        travel = self.us(16, 8)
         if eased < 0.5:
             phase = eased / 0.5
             outgoing_shift = -travel * phase
@@ -4016,7 +4246,7 @@ class IslamicBackground:
             return
 
         self._post_overlay_text_transition_after_id = self.root.after(
-            self.salah_name_transition_tick_ms,
+            self.post_overlay_transition_tick_ms,
             self._tick_post_overlay_text_transition
         )
 
@@ -4051,6 +4281,14 @@ class IslamicBackground:
             self.iqamah_overlay_mode = None
             self.current_prayer_iqamah_time = None
             self.current_prayer_name = None
+
+            # Restore prayer-change ribbon visibility state after overlay closes.
+            if not self._ribbon_transition_running:
+                state = 'normal' if self.ribbon_visible else 'hidden'
+                try:
+                    self.canvas.itemconfig('prayer_change_ribbon', state=state)
+                except:
+                    pass
             
         except Exception as e:
             self._log(f"ERROR in hide_iqamah_overlay: {e}")
@@ -4163,6 +4401,30 @@ class IslamicBackground:
             if bg_items:
                 self.canvas.tag_raise('iqamah_overlay_time_bg')
                 self.canvas.tag_raise('iqamah_overlay_current_time')
+
+            # Keep Friday warning text synced to Arabic/English setting cadence.
+            if self.iqamah_overlay_mode == 'countdown' and getattr(self, '_iqamah_countdown_is_friday', False):
+                warning_items = self.canvas.find_withtag('iqamah_friday_warning_text')
+                if warning_items:
+                    try:
+                        change_every_seconds = int(self.config.get('arabicchangeevery', 30))
+                        change_every_seconds = max(1, change_every_seconds)
+                    except:
+                        change_every_seconds = 30
+                    try:
+                        arabic_duration_seconds = int(self.config.get('arabicnameduration', 10))
+                        arabic_duration_seconds = max(0, arabic_duration_seconds)
+                    except:
+                        arabic_duration_seconds = 5
+                    arabic_duration_seconds = min(arabic_duration_seconds, change_every_seconds)
+                    now_dt = datetime.combine(self.get_current_date(), self.get_current_time())
+                    seconds_into_cycle = int(now_dt.timestamp()) % change_every_seconds
+                    warning_text = 'Talking is forbidden during Khutbahs'
+                    if arabic_duration_seconds > 0 and seconds_into_cycle < arabic_duration_seconds:
+                        warning_text = 'الكلام محرم اثناء الخطبتين'
+                    for item_id in warning_items:
+                        self.canvas.itemconfig(item_id, text=warning_text)
+
         except Exception as e:
             self._log(f"ERROR in update_iqamah_overlay_countdown: {e}")
 
@@ -5751,7 +6013,7 @@ class IslamicBackground:
 
         # Move current time noticeably higher relative to the lower prayer row.
         current_time_y = self.jummah_box_y + self.jummah_box_h - self.us(20, 10)
-        outline_step = self.us(3, 2)
+        outline_step = self.us(4, 3)
         outline_offsets = [
             (-outline_step, -outline_step), (-outline_step, 0), (-outline_step, outline_step),
             (0, -outline_step), (0, outline_step),
@@ -5776,13 +6038,27 @@ class IslamicBackground:
 
         # Next prayer line in one row with split colors
         prayers_data = self.get_today_prayers()
-        display_data = self.get_next_line_display_data(prayers_data)
+        live_display_data = self.get_next_line_display_data(prayers_data)
+        if not self._np_initialized:
+            self._np_rtl = bool(live_display_data.get('rtl', False))
+            self._np_initialized = True
+
+        # Keep draw source locked to committed ticker mode; update_countdown decides when to switch.
+        display_data = self.get_next_line_display_data(prayers_data, force_show_arabic=self._np_rtl)
         prefix_text = display_data['prefix_text']
         name_text = display_data['name_text']
         in_text = display_data['in_text']
         countdown_text = display_data['countdown_text']
         rtl_mode = bool(display_data.get('rtl', False))
 
+        # Check if ticker animation is active and override draw data + compute shift factor
+        _np_anim_data, _np_shift_factor = self._np_get_draw_data()
+        if _np_anim_data is not None:
+            prefix_text  = _np_anim_data.get('prefix', prefix_text)
+            name_text    = _np_anim_data.get('name', name_text)
+            in_text      = _np_anim_data.get('in_', in_text)
+            countdown_text = _np_anim_data.get('countdown', countdown_text)
+            rtl_mode     = bool(_np_anim_data.get('rtl', rtl_mode))
         line_size = int(self.next_prayer_line_font.cget('size'))
         prefix_size = int(self.next_prayer_prefix_font.cget('size'))
         min_line_size = max(18, self.fs(28, 14))
@@ -5827,7 +6103,13 @@ class IslamicBackground:
             panel_x1, panel_y1, panel_width, panel_height, self.next_prayer_panel_radius,
             fill=palette['next_panel_fill'], outline=palette['next_panel_outline'], outline_width=3
         )
-        left_x = x - (total_width / 2)
+
+        # Constrain ticker travel to inner panel padding so text never leaves the white box.
+        available_shift = max(0.0, ((panel_width - total_width) / 2.0) - 2.0)
+        max_shift = min(available_shift, float(self.us(24, 12)))
+        shift_x = _np_shift_factor * max_shift
+
+        left_x = x - (total_width / 2) + shift_x
 
         self.next_prayer_line_x = x
         self.next_prayer_line_y = line_center_y
@@ -5837,7 +6119,7 @@ class IslamicBackground:
         self._next_prayer_last_text_parts = (prefix_text, name_text, in_text)
         self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
         if rtl_mode:
-            right_x = x + (total_width / 2)
+            right_x = x + (total_width / 2) + shift_x
             self.next_prayer_prefix_text_id = self.canvas.create_text(
                 right_x, line_center_y,
                 text=prefix_text,
@@ -6029,7 +6311,7 @@ class IslamicBackground:
             change_every_seconds = 30
 
         try:
-            arabic_duration_seconds = int(self.config.get('arabicnameduration', 5))
+            arabic_duration_seconds = int(self.config.get('arabicnameduration', 10))
             arabic_duration_seconds = max(0, arabic_duration_seconds)
         except:
             arabic_duration_seconds = 5
@@ -6197,6 +6479,16 @@ class IslamicBackground:
 
     def _start_ribbon_transition(self, target_visible):
         """Start shine transition for iqamah-change ribbon show/hide."""
+        # Never animate/show ribbon while iqamah overlay is active.
+        if self.iqamah_overlay_visible:
+            try:
+                self.canvas.itemconfig('prayer_change_ribbon', state='hidden')
+            except:
+                pass
+            self._ribbon_transition_running = False
+            self._clear_ribbon_transition_artifacts()
+            return
+
         self._ribbon_transition_running = False
         self._clear_ribbon_transition_artifacts()
 
@@ -6214,14 +6506,24 @@ class IslamicBackground:
     def update_ribbon_cycle(self):
         """Update prayer-change ribbon visibility (15s ON, 15s OFF) without redraw."""
         try:
-            prev_visible = self.ribbon_visible
-            self.ribbon_cycle_counter = (self.ribbon_cycle_counter + 1) % 30
-            self.ribbon_visible = (self.ribbon_cycle_counter < 15)
-            if self.ribbon_visible != prev_visible:
-                self._start_ribbon_transition(self.ribbon_visible)
-            elif not self._ribbon_transition_running:
-                state = 'normal' if self.ribbon_visible else 'hidden'
-                self.canvas.itemconfig('prayer_change_ribbon', state=state)
+            if self.iqamah_overlay_visible:
+                # Keep ribbon hidden while overlay is visible.
+                if self._ribbon_transition_running:
+                    self._ribbon_transition_running = False
+                    self._clear_ribbon_transition_artifacts()
+                try:
+                    self.canvas.itemconfig('prayer_change_ribbon', state='hidden')
+                except:
+                    pass
+            else:
+                prev_visible = self.ribbon_visible
+                self.ribbon_cycle_counter = (self.ribbon_cycle_counter + 1) % 30
+                self.ribbon_visible = (self.ribbon_cycle_counter < 15)
+                if self.ribbon_visible != prev_visible:
+                    self._start_ribbon_transition(self.ribbon_visible)
+                elif not self._ribbon_transition_running:
+                    state = 'normal' if self.ribbon_visible else 'hidden'
+                    self.canvas.itemconfig('prayer_change_ribbon', state=state)
         except Exception as e:
             self._log(f"ERROR in update_ribbon_cycle: {e}")
         
