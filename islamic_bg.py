@@ -78,12 +78,12 @@ class IslamicBackground:
         self.root.after(1200, lambda: self.root.attributes('-topmost', False))
         
         # Fullscreen configuration (always start fullscreen)
-        self.root.attributes('-fullscreen', True)
+        self._enter_fullscreen()
         self.root.configure(bg='#2c1169')
         
         # Keyboard bindings
-        self.root.bind('<Escape>', lambda e: self.root.attributes('-fullscreen', False))
-        self.root.bind('<F11>', lambda e: self.root.attributes('-fullscreen', True))
+        self.root.bind('<Escape>', self._exit_fullscreen)
+        self.root.bind('<F11>', self._toggle_fullscreen)
         self.root.bind('q', lambda e: self.root.quit())
         self.root.bind('Q', lambda e: self.root.quit())
         
@@ -375,7 +375,7 @@ class IslamicBackground:
         """Force window to front a few times during startup."""
         try:
             self.root.deiconify()
-            self.root.attributes('-fullscreen', True)
+            self._enter_fullscreen()
             self.root.lift()
             self.root.attributes('-topmost', True)
             self.root.focus_force()
@@ -389,6 +389,46 @@ class IslamicBackground:
                 self.root.after(350, self._startup_visibility_nudge)
             except:
                 pass
+
+    def _enter_fullscreen(self, event=None):
+        """Enter reliable fullscreen, especially on Windows where taskbar can remain visible."""
+        try:
+            self.root.deiconify()
+            screen_w = self.root.winfo_screenwidth()
+            screen_h = self.root.winfo_screenheight()
+            if sys.platform.startswith('win'):
+                self.root.overrideredirect(True)
+                self.root.geometry(f"{screen_w}x{screen_h}+0+0")
+                self.root.state('normal')
+            self.root.attributes('-fullscreen', True)
+            self.root.lift()
+            self.root.attributes('-topmost', True)
+            self.root.focus_force()
+            self.root.after(120, lambda: self.root.attributes('-topmost', False))
+        except:
+            pass
+        return 'break'
+
+    def _exit_fullscreen(self, event=None):
+        """Exit fullscreen and restore normal managed window state."""
+        try:
+            self.root.attributes('-fullscreen', False)
+            if sys.platform.startswith('win'):
+                self.root.overrideredirect(False)
+            self.root.state('normal')
+        except:
+            pass
+        return 'break'
+
+    def _toggle_fullscreen(self, event=None):
+        """Toggle fullscreen mode with Windows-safe behavior."""
+        try:
+            is_fullscreen = bool(self.root.attributes('-fullscreen'))
+        except:
+            is_fullscreen = False
+        if is_fullscreen:
+            return self._exit_fullscreen(event)
+        return self._enter_fullscreen(event)
         
     def get_current_date(self):
         """Get current date, respecting test mode"""
@@ -5151,8 +5191,11 @@ class IslamicBackground:
         self._weather_row_images.clear()
 
         label_font = self.fs(20, 11)
-        icon_font = self.fs(26, 13)
-        temp_font = self.fs(26, 14)
+        icon_font = self.fs(24, 12)
+        temp_font = self.fs(34, 18)
+        label_font_spec = ('Arial', label_font, 'bold')
+        temp_color_now = '#ffffff'
+        temp_color_forecast = '#ffffff'
 
         for i, (label, icon, temp_text) in enumerate(cards):
             rx = x_start + i * (card_w + card_gap)
@@ -5163,7 +5206,7 @@ class IslamicBackground:
                 draw = ImageDraw.Draw(bg_img)
                 r = corner_r
                 # "Now" card slightly brighter, forecast cards darker
-                bg_color = (20, 40, 70, 220) if i == 0 else (10, 20, 40, 205)
+                bg_color = (20, 40, 70, 190) if i == 0 else (10, 20, 40, 175)
                 draw.rounded_rectangle(
                     [(0, 0), (card_w - 1, card_h - 1)],
                     radius=r, fill=bg_color
@@ -5181,16 +5224,17 @@ class IslamicBackground:
             self.canvas.create_text(
                 rx + padding_x, y_start + self.us(16, 9),
                 text=label,
-                font=('Arial', label_font, 'bold'),
-                fill='#e0e8f0' if i == 0 else '#a0b8d0',
+                font=label_font_spec,
+                fill='#ffffff',
                 anchor='w',
                 tags='weather_row'
             )
 
-            # Icon in lower-left area
+            # Icon sits next to the label (Now / forecast day)
             icon_color = icon_colors.get(icon, '#ffffff')
+            label_w = tkfont.Font(font=label_font_spec).measure(f"{label} ")
             self.canvas.create_text(
-                rx + padding_x, y_start + card_h - self.us(24, 12),
+                rx + padding_x + label_w, y_start + self.us(16, 9),
                 text=icon,
                 font=('Segoe UI Emoji', icon_font),
                 fill=icon_color,
@@ -5203,7 +5247,7 @@ class IslamicBackground:
                 rx + card_w - padding_x, y_start + card_h - self.us(24, 12),
                 text=temp_text,
                 font=('Arial', temp_font, 'bold'),
-                fill='#ffffff' if i == 0 else '#c0d8e8',
+                fill=temp_color_now if i == 0 else temp_color_forecast,
                 anchor='e',
                 tags='weather_row'
             )
@@ -5802,7 +5846,7 @@ class IslamicBackground:
                     badge_x + (badge_w / 2),
                     badge_y + (badge_h / 2),
                     text='Next',
-                    font=(ui_family, self.fs(20, 11), 'bold'),
+                    font=(ui_family, self.fs(30, 16), 'bold'),
                     fill='white'
                 )
 
