@@ -2561,16 +2561,30 @@ class IslamicBackground:
         if not raw_text.strip():
             return entries
 
-        pattern = re.compile(
-            r'^(?P<label>.+?)\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[APap][Mm])\s+on\s+'
-            r'(?P<weekday>[A-Za-z]+)\s+(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})$'
-        )
+        patterns = [
+            re.compile(
+                r'^(?P<label>.+?)\s+and\s+salah\s+is\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[APap][Mm])\s+on\s+'
+                r'(?P<weekday>[A-Za-z]+)\s+(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})$'
+            ),
+            re.compile(
+                r'^(?P<label>.+?)\s+salah\s+is\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[APap][Mm])\s+on\s+'
+                r'(?P<weekday>[A-Za-z]+)\s+(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})$'
+            ),
+            re.compile(
+                r'^(?P<label>.+?)\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[APap][Mm])\s+on\s+'
+                r'(?P<weekday>[A-Za-z]+)\s+(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})$'
+            )
+        ]
 
         for raw_line in raw_text.splitlines():
             line = raw_line.strip()
             if not line or line.startswith('#'):
                 continue
-            match = pattern.match(line)
+            match = None
+            for pattern in patterns:
+                match = pattern.match(line)
+                if match:
+                    break
             if not match:
                 continue
 
@@ -2584,6 +2598,7 @@ class IslamicBackground:
 
             entries.append({
                 'label': label,
+                'message': line,
                 'salah_dt': salah_dt,
                 'end_dt': salah_dt + timedelta(hours=1)
             })
@@ -5599,7 +5614,7 @@ class IslamicBackground:
         self.salah_name_canvas_ids = []
 
         left_panel_x = self.us(36, 18)
-        left_panel_y = self.us(250, 160)
+        left_panel_y = self.us(236, 150)
         left_panel_w = min(self.us(880, 550), max(self.us(590, 360), width * 0.50))
 
         cards_bottom_margin = self.us(170, 100)
@@ -7415,6 +7430,24 @@ class IslamicBackground:
             arabic_day = arabic_weekdays.get(salah_dt.strftime('%A'), salah_dt.strftime('%A'))
             arabic_month = arabic_months.get(salah_dt.strftime('%B'), salah_dt.strftime('%B'))
             arabic_time_token = f"{arabic_time} {arabic_period}"
+            eid_label = str(eid_event.get('label', '') or '')
+            takbeerat_match = re.search(r'takbeerat\s+starts\s+at\s+(\d{1,2}:\d{2}\s*[APap][Mm])', eid_label, re.IGNORECASE)
+            takbeerat_time_token = None
+            if takbeerat_match:
+                takbeerat_time_str = re.sub(r'\s+', ' ', takbeerat_match.group(1).upper()).strip()
+                try:
+                    takbeerat_dt = datetime.strptime(takbeerat_time_str, '%I:%M %p')
+                    takbeerat_period = 'صباحًا' if takbeerat_dt.strftime('%p') == 'AM' else 'مساءً'
+                    takbeerat_time = f"{takbeerat_dt.strftime('%I').lstrip('0') or '12'}:{takbeerat_dt.strftime('%M')}"
+                    takbeerat_time_token = f"{takbeerat_time} {takbeerat_period}"
+                except Exception:
+                    takbeerat_time_token = None
+            if 'Fitr' in eid_label:
+                eid_arabic_label = 'صلاة عيد الفطر'
+            elif 'Adha' in eid_label:
+                eid_arabic_label = 'صلاة عيد الأضحى'
+            else:
+                eid_arabic_label = 'صلاة العيد'
             if self.eid_ribbon_phase == 'arabic':
                 # Arabic pass: left-to-right
                 self.eid_ribbon_direction = 1
@@ -7422,7 +7455,11 @@ class IslamicBackground:
                     # Single Arabic segment keeps word order stable across font/render changes.
                     'prefix': '',
                     'new_time': '',
-                    'suffix': f"\u202Bصلاة عيد الأضحى الساعة {arabic_time_token} يوم {arabic_day} {salah_dt.day} {arabic_month} {salah_dt.year}\u202C",
+                    'suffix': (
+                        f"\u202Bتكبيرات عيد الأضحى تبدأ الساعة {takbeerat_time_token}، وصلاة العيد ستكون الساعة {arabic_time_token} يوم {arabic_day} {salah_dt.day} {arabic_month} {salah_dt.year}\u202C"
+                        if ('Adha' in eid_label and takbeerat_time_token)
+                        else f"\u202B{eid_arabic_label} ستكون الساعة {arabic_time_token} يوم {arabic_day} {salah_dt.day} {arabic_month} {salah_dt.year}\u202C"
+                    ),
                     'prefix_color': 'black',
                     'new_time_color': 'black',
                     'suffix_color': 'black'
@@ -7431,10 +7468,23 @@ class IslamicBackground:
                 # English pass: right-to-left
                 self.eid_ribbon_phase = 'english'
                 self.eid_ribbon_direction = -1
+                english_message = str(eid_event.get('message', '') or '').strip()
+                if not english_message:
+                    english_message = f"{eid_event['label']} at {eid_time} on {eid_date}"
+
+                english_prefix = ''
+                english_highlight = ''
+                english_suffix = english_message
+                time_match = re.search(re.escape(eid_time), english_message, re.IGNORECASE)
+                if time_match:
+                    english_prefix = english_message[:time_match.start()]
+                    english_highlight = english_message[time_match.start():time_match.end()]
+                    english_suffix = english_message[time_match.end():]
+
                 changes_text.append({
-                    'prefix': f"{eid_event['label']} at ",
-                    'new_time': eid_time,
-                    'suffix': f" on {eid_date}",
+                    'prefix': english_prefix,
+                    'new_time': english_highlight,
+                    'suffix': english_suffix,
                     'prefix_color': 'black',
                     'new_time_color': '#d32f2f',
                     'suffix_color': 'black'
