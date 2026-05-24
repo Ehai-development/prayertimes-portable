@@ -125,8 +125,9 @@ class IslamicBackground:
         self.next_prayer_line_y = None
         self.next_prayer_panel_bounds = None
         self.next_prayer_athan_time = None
-        self.next_prayer_line_font = tkfont.Font(family='Arial', size=20, weight='bold')
-        self.next_prayer_prefix_font = tkfont.Font(family='Arial', size=18, weight='bold')
+        self.ui_font_family = 'Bahnschrift'
+        self.next_prayer_line_font = tkfont.Font(family=self.ui_font_family, size=20, weight='bold')
+        self.next_prayer_prefix_font = tkfont.Font(family=self.ui_font_family, size=18, weight='bold')
         self.next_prayer_countdown_fixed_width = self.next_prayer_line_font.measure('88:88:88')
         self.next_prayer_static_width = None
         self._next_prayer_last_text_parts = None
@@ -5569,6 +5570,7 @@ class IslamicBackground:
     def draw_elegent_v2_left_prayer_table(self, width, height, prayers_data, prayers, current_prayer):
         """Draw elegent_v2 as a boxed table on the left side: Prayer | Athan | Iqamah."""
         palette = self.get_theme_palette()
+        ui_family = getattr(self, 'ui_font_family', 'Bahnschrift')
         next_prayer_name, next_athan = self.get_next_prayer(prayers_data)
         next_prayer_key = self.get_next_iqamah_prayer_key(prayers_data)
 
@@ -5634,8 +5636,8 @@ class IslamicBackground:
             header_y,
             'Prayer',
             'الصلاة',
-            ('Arial', header_font_size, 'bold'),
-            ('Arial', header_font_size, 'bold'),
+            (ui_family, header_font_size, 'bold'),
+            (ui_family, header_font_size, 'bold'),
             palette['title_text'],
             '#f3e3b8',
             anchor='w'
@@ -5645,8 +5647,8 @@ class IslamicBackground:
             header_y,
             'Athan',
             'الأذان',
-            ('Arial', header_font_size, 'bold'),
-            ('Arial', header_font_size, 'bold'),
+            (ui_family, header_font_size, 'bold'),
+            (ui_family, header_font_size, 'bold'),
             palette['title_text'],
             '#f3e3b8',
             anchor='center'
@@ -5656,8 +5658,8 @@ class IslamicBackground:
             header_y,
             'Iqamah',
             'الإقامة',
-            ('Arial', header_font_size, 'bold'),
-            ('Arial', header_font_size, 'bold'),
+            (ui_family, header_font_size, 'bold'),
+            (ui_family, header_font_size, 'bold'),
             palette['title_text'],
             '#f3e3b8',
             anchor='center'
@@ -5716,7 +5718,7 @@ class IslamicBackground:
                     badge_x + (badge_w / 2),
                     badge_y + (badge_h / 2),
                     text='Next',
-                    font=('Arial', self.fs(20, 11), 'bold'),
+                    font=(ui_family, self.fs(20, 11), 'bold'),
                     fill='white'
                 )
 
@@ -5739,7 +5741,7 @@ class IslamicBackground:
                     current_badge_x + (current_badge_w / 2),
                     current_badge_y + (current_badge_h / 2),
                     text='Current',
-                    font=('Arial', self.fs(20, 11), 'bold'),
+                    font=(ui_family, self.fs(20, 11), 'bold'),
                     fill='black'
                 )
 
@@ -5805,7 +5807,7 @@ class IslamicBackground:
                     prefix_text = f'{display_name} Iqamah changes to '
                     suffix_text = ' Tomorrow'
                 new_time_text = tomorrow_iqamah_overlay
-                overlay_font = ('Arial', self.fs(30, 16), 'bold')
+                overlay_font = (ui_family, self.fs(30, 16), 'bold')
                 overlay_font_obj = tkfont.Font(font=overlay_font)
                 prefix_w = overlay_font_obj.measure(prefix_text)
                 new_time_w = overlay_font_obj.measure(new_time_text)
@@ -5879,15 +5881,15 @@ class IslamicBackground:
                     center_y,
                     display_name,
                     arabic,
-                    ('Arial', name_font_size, 'bold'),
-                    ('Arial', name_font_size, 'bold'),
+                    (ui_family, name_font_size, 'bold'),
+                    (ui_family, name_font_size, 'bold'),
                     palette['title_text'],
                     fill_color,
                     anchor='w'
                 )
                 if key == 'Jummah' and not bool(getattr(self, 'salah_names_show_arabic', False)):
-                    jummah_font = ('Arial', name_font_size, 'bold')
-                    khutbah_font = ('Arial', self.fs(16, 9), 'bold')
+                    jummah_font = (ui_family, name_font_size, 'bold')
+                    khutbah_font = (ui_family, self.fs(16, 9), 'bold')
                     jummah_width = tkfont.Font(font=jummah_font).measure('Jummah')
                     self.canvas.create_text(
                         name_left_x + jummah_width + self.us(14, 8),
@@ -6691,6 +6693,7 @@ class IslamicBackground:
     def draw_time_text_with_meridiem(self, x, y, time_text, main_size=36, suffix_size=20, color='#1a3a5f', **kwargs):
         """Draw time with bigger numeric part and smaller AM/PM suffix"""
         normalized_text = (time_text or '--').strip()
+        ui_family = getattr(self, 'ui_font_family', 'Bahnschrift')
         anchor = kwargs.pop('anchor', 'center')
         parts = normalized_text.rsplit(' ', 1)
 
@@ -6698,8 +6701,8 @@ class IslamicBackground:
             main_text = parts[0]
             suffix_text = f" {parts[1].upper()}"
 
-            main_font = ('Arial', main_size, 'bold')
-            suffix_font = ('Arial', suffix_size, 'bold')
+            main_font = (ui_family, main_size, 'bold')
+            suffix_font = (ui_family, suffix_size, 'bold')
 
             main_width = tkfont.Font(font=main_font).measure(main_text)
             suffix_width = tkfont.Font(font=suffix_font).measure(suffix_text)
@@ -6731,7 +6734,7 @@ class IslamicBackground:
             self.canvas.create_text(
                 x, y,
                 text=normalized_text,
-                font=('Arial', main_size, 'bold'),
+                font=(ui_family, main_size, 'bold'),
                 fill=color,
                 anchor=anchor,
                 **kwargs
