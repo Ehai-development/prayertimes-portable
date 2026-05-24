@@ -617,7 +617,7 @@ class IslamicBackground:
                 # Update only the current prayer box with a soft glow pulse.
                 # Skip entirely while any athan warning is active.
                 current = self.last_rendered_current_prayer
-                if current and current in self.prayer_box_fill_ids and self.athan_callout_prayer is None:
+                if current and current in self.prayer_box_fill_ids and self.athan_callout_prayer is None and theme_name != 'elegent_v2':
                     palette = self.get_theme_palette()
                     outline_width = 0 if no_outline_mode else (self.us(4, 2) + int(round(self.us(2, 1) * pulse)))
                     outline_alpha = 150 + int(round(90 * pulse))
@@ -1746,8 +1746,9 @@ class IslamicBackground:
         if theme_name == 'elegent_v2':
             return {
                 'card_fill': '#0d2a66',
+                'card_alt_fill': '#8fc4ff',
                 'card_outline': '#3a5ea8',
-                'card_current_fill': '#2f67c7',
+                'card_current_fill': '#d4af37',
                 'card_current_outline': '#9ec5ff',
                 'title_text': '#eef5ff',
                 'subtle_text': '#c8dbff',
@@ -2681,14 +2682,18 @@ class IslamicBackground:
         """Determine which prayer time period we are currently in"""
         now = self.get_current_time()
         is_friday = (self.get_current_date().weekday() == 4)
+        _, sunrise_time = self.resolve_sunrise_time(prayers_data)
+        shrouq_plus = max(0, int(self.config.get('shrouqplus', 10)))
+        shrouq_start_time = None
+        if sunrise_time:
+            shrouq_start_time = (datetime.combine(self.get_current_date(), sunrise_time) + timedelta(minutes=shrouq_plus)).time()
 
         if is_friday:
-            _, sunrise_time = self.resolve_sunrise_time(prayers_data)
             asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
             friday_duhr_start = self.parse_time('2:15 PM')
             jummah_time = self.jummah_time or self.parse_time('1:30 PM')
 
-            if sunrise_time and jummah_time and sunrise_time <= now < jummah_time:
+            if shrouq_start_time and jummah_time and shrouq_start_time <= now < jummah_time:
                 return 'Shrouq'
 
             if jummah_time and friday_duhr_start and jummah_time <= now < friday_duhr_start:
@@ -2699,10 +2704,9 @@ class IslamicBackground:
 
         # Current period boundaries by Athan-style starts, including Shrouq via Sunrise.
         # This keeps prayer highlighting consistent throughout each period.
-        sunrise_value, sunrise_time = self.resolve_sunrise_time(prayers_data)
         prayer_schedule = [
             ('Fajr', self.parse_time(prayers_data.get('FajrAthan', ''))),
-            ('Shrouq', sunrise_time),
+            ('Shrouq', shrouq_start_time),
             ('Duhr', self.parse_time(prayers_data.get('DuhrAthan', ''))),
             ('Asr', self.parse_time(prayers_data.get('AsrAthan', ''))),
             ('Maghrib', self.parse_time(prayers_data.get('MaghribAthan', ''))),
@@ -2742,13 +2746,20 @@ class IslamicBackground:
         """Get the next prayer and its Athan time"""
         current_time = self.get_current_time()  # Use mocked time if in TEST_MODE
         is_friday = (self.get_current_date().weekday() == 4)
+        _, sunrise_time = self.resolve_sunrise_time(prayers_data)
+        shrouq_plus = max(0, int(self.config.get('shrouqplus', 10)))
+        shrouq_start_time = None
+        if sunrise_time:
+            shrouq_start_time = (datetime.combine(self.get_current_date(), sunrise_time) + timedelta(minutes=shrouq_plus)).time()
 
         if is_friday:
-            _, sunrise_time = self.resolve_sunrise_time(prayers_data)
             jummah_time = self.jummah_time or self.parse_time('1:30 PM')
             asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
 
-            if sunrise_time and jummah_time and sunrise_time <= current_time < jummah_time:
+            if shrouq_start_time and current_time < shrouq_start_time:
+                return 'Shrouq', shrouq_start_time
+
+            if shrouq_start_time and jummah_time and shrouq_start_time <= current_time < jummah_time:
                 return 'Jummah', jummah_time
 
             if jummah_time and asr_athan and jummah_time <= current_time < asr_athan:
@@ -2757,11 +2768,11 @@ class IslamicBackground:
         midday_name = 'Jummah' if is_friday else 'Duhr'
 
         # Include Shrouq (Sunrise) in the prayer progression
-        _, sunrise_time = self.resolve_sunrise_time(prayers_data)
+        duhr_athan = self.parse_time(prayers_data.get('DuhrAthan', ''))
         prayer_schedule = [
             ('Fajr', self.parse_time(prayers_data.get('FajrAthan', ''))),
-            ('Shrouq', sunrise_time),
-            (midday_name, self.parse_time(prayers_data.get('DuhrAthan', ''))),
+            ('Shrouq', shrouq_start_time),
+            (midday_name, duhr_athan),
             ('Asr', self.parse_time(prayers_data.get('AsrAthan', ''))),
             ('Maghrib', self.parse_time(prayers_data.get('MaghribAthan', ''))),
             ('Isha', self.parse_time(prayers_data.get('IshaAthan', '')))
@@ -2770,11 +2781,6 @@ class IslamicBackground:
         # Find next prayer based on current time
         for prayer_name, athan_time in prayer_schedule:
             if athan_time and current_time < athan_time:
-                # For Shrouq, add shrouqplus minutes so countdown targets end of sunrise period
-                if prayer_name == 'Shrouq':
-                    shrouq_plus = int(self.config.get('shrouqplus', 10))
-                    shrouq_dt = datetime.combine(self.get_current_date(), athan_time) + timedelta(minutes=shrouq_plus)
-                    athan_time = shrouq_dt.time()
                 return prayer_name, athan_time
 
         # If no prayer found, next is Fajr (tomorrow)
@@ -5032,7 +5038,7 @@ class IslamicBackground:
         card_gap = self.us(10, 6)
         padding_x = self.us(12, 7)
         corner_r = self.us(12, 6)
-        weather_y_offset = self.us(32, 18)
+        weather_y_offset = -self.us(10, 6)
 
         # Icon color mapping
         icon_colors = {
@@ -5097,7 +5103,7 @@ class IslamicBackground:
                 draw = ImageDraw.Draw(bg_img)
                 r = corner_r
                 # "Now" card slightly brighter, forecast cards darker
-                bg_color = (20, 40, 70, 160) if i == 0 else (10, 20, 40, 140)
+                bg_color = (20, 40, 70, 220) if i == 0 else (10, 20, 40, 205)
                 draw.rounded_rectangle(
                     [(0, 0), (card_w - 1, card_h - 1)],
                     radius=r, fill=bg_color
@@ -5564,15 +5570,28 @@ class IslamicBackground:
                 palette['title_text'],
                 row_fill
             )
-            self.draw_time_text_with_meridiem(col_athan_x, y1 + (row_h / 2), athan_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['athan_text'])
-            self.draw_time_text_with_meridiem(col_iqamah_x, y1 + (row_h / 2), iqamah_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['iqamah_text'])
+            self.draw_time_text_with_meridiem(col_athan_x, y1 + (row_h / 2), athan_time, main_size=self.fs(48, 26), suffix_size=self.fs(22, 12), color=palette['athan_text'])
+            self.draw_time_text_with_meridiem(col_iqamah_x, y1 + (row_h / 2), iqamah_time, main_size=self.fs(48, 26), suffix_size=self.fs(22, 12), color=palette['iqamah_text'])
 
     def draw_elegent_v2_left_prayer_table(self, width, height, prayers_data, prayers, current_prayer):
         """Draw elegent_v2 as a boxed table on the left side: Prayer | Athan | Iqamah."""
         palette = self.get_theme_palette()
         ui_family = getattr(self, 'ui_font_family', 'Bahnschrift')
+        is_friday = (self.get_current_date().weekday() == 4)
         next_prayer_name, next_athan = self.get_next_prayer(prayers_data)
         next_prayer_key = self.get_next_iqamah_prayer_key(prayers_data)
+        if not next_prayer_key:
+            next_prayer_key = 'Duhr' if (is_friday and next_prayer_name == 'Jummah') else next_prayer_name
+
+        # When countdown is intentionally held on Shrouq, keep a visible Next badge
+        # on the following prayer row instead of colliding with Current on Shrouq.
+        if next_prayer_key == current_prayer:
+            order = ['Fajr', 'Shrouq', 'Jummah', 'Duhr', 'Asr', 'Maghrib', 'Isha'] if is_friday else ['Fajr', 'Shrouq', 'Duhr', 'Asr', 'Maghrib', 'Isha']
+            try:
+                idx = order.index(current_prayer)
+                next_prayer_key = order[(idx + 1) % len(order)]
+            except Exception:
+                pass
 
         self.prayer_box_shape_ids = {}
         self.prayer_box_bounds = {}
@@ -5580,18 +5599,18 @@ class IslamicBackground:
         self.salah_name_canvas_ids = []
 
         left_panel_x = self.us(36, 18)
-        left_panel_y = self.us(290, 185)
+        left_panel_y = self.us(250, 160)
         left_panel_w = min(self.us(880, 550), max(self.us(590, 360), width * 0.50))
 
         cards_bottom_margin = self.us(170, 100)
-        row_gap = self.us(5, 3)
+        row_gap = 0
         header_font_size = self.fs(30, 16)
         row_name_font_size = self.fs(48, 27)
-        row_time_main_size = self.fs(52, 29)
-        row_time_suffix_size = self.fs(26, 15)
+        row_time_main_size = self.fs(58, 33)
+        row_time_suffix_size = self.fs(30, 17)
         header_h = header_font_size + self.us(24, 14)
         row_content_h = max(row_name_font_size, row_time_main_size)
-        row_h = row_content_h + self.us(12, 6)
+        row_h = row_content_h + self.us(24, 12)
         min_required_h = header_h + row_gap + (row_h * len(prayers)) + (row_gap * (len(prayers) - 1))
         max_h = max(self.us(520, 320), height - left_panel_y - cards_bottom_margin)
         if min_required_h > max_h:
@@ -5599,14 +5618,14 @@ class IslamicBackground:
             shrink_ratio = max_h / min_required_h
             header_font_size = max(self.fs(24, 13), int(header_font_size * shrink_ratio))
             row_name_font_size = max(self.fs(36, 20), int(row_name_font_size * shrink_ratio))
-            row_time_main_size = max(self.fs(40, 22), int(row_time_main_size * shrink_ratio))
-            row_time_suffix_size = max(self.fs(20, 11), int(row_time_suffix_size * shrink_ratio))
+            row_time_main_size = max(self.fs(44, 24), int(row_time_main_size * shrink_ratio))
+            row_time_suffix_size = max(self.fs(22, 12), int(row_time_suffix_size * shrink_ratio))
             header_h = header_font_size + self.us(20, 12)
             row_content_h = max(row_name_font_size, row_time_main_size)
             row_h = row_content_h + self.us(10, 5)
 
         col1_x = left_panel_x + (left_panel_w * 0.21)
-        col2_x = left_panel_x + (left_panel_w * 0.52)
+        col2_x = left_panel_x + (left_panel_w * 0.46)
         col3_x = left_panel_x + (left_panel_w * 0.84)
 
         header_shape_id = self.draw_rounded_rectangle(
@@ -5670,11 +5689,13 @@ class IslamicBackground:
             y = left_panel_y + header_h + row_gap + (idx * (row_h + row_gap))
             change_info = self.changing_prayers.get(key, {}) if key in self.changing_prayers else {}
             tomorrow_iqamah_overlay = (change_info.get('tomorrow_iqama') or '--').strip()
-            has_change_overlay = bool(tomorrow_iqamah_overlay and tomorrow_iqamah_overlay != '--' and self.ribbon_visible)
+            has_change_overlay = False
             if has_change_overlay and key == 'Fajr' and 'AM' not in tomorrow_iqamah_overlay and 'PM' not in tomorrow_iqamah_overlay:
                 tomorrow_iqamah_overlay = tomorrow_iqamah_overlay + ' AM'
 
-            fill_color = palette['card_current_fill'] if is_current else palette['card_fill']
+            light_row_keys = {'Shrouq', 'Asr', 'Isha'}
+            base_fill_color = palette.get('card_alt_fill', palette['card_fill']) if key in light_row_keys else palette['card_fill']
+            fill_color = palette['card_current_fill'] if is_current else base_fill_color
             corner_radius = self.us(18, 10)
 
             shape_id = self.draw_rounded_rectangle(
@@ -5689,21 +5710,24 @@ class IslamicBackground:
             )
 
             fill_id = self.draw_alpha_fill(
-                left_panel_x + self.us(2, 1),
-                y + self.us(2, 1),
-                left_panel_w - self.us(4, 2),
-                row_h - self.us(4, 2),
+                left_panel_x,
+                y,
+                left_panel_w,
+                row_h,
                 fill_color=fill_color,
                 opacity_percent=self.prayer_box_opacity_percent,
-                radius=max(0, corner_radius - self.us(2, 1))
+                radius=corner_radius
             )
             self.canvas.tag_lower(fill_id, shape_id)
 
+            badge_dx = self.us(18, 9)
+            badge_dy = self.us(12, 6)
+
             if key == next_prayer_key and not has_change_overlay:
-                badge_w = self.us(92, 52)
-                badge_h = self.us(34, 20)
-                badge_x = (left_panel_x + left_panel_w) - (badge_w / 2)
-                badge_y = y - (badge_h / 2)
+                badge_w = self.us(116, 66)
+                badge_h = self.us(44, 26)
+                badge_x = (left_panel_x + left_panel_w) - (badge_w / 2) + badge_dx
+                badge_y = y - (badge_h / 2) + badge_dy
                 self.draw_rounded_rectangle(
                     badge_x,
                     badge_y,
@@ -5722,38 +5746,16 @@ class IslamicBackground:
                     fill='white'
                 )
 
-            if key == current_prayer and not has_change_overlay:
-                current_badge_w = self.us(110, 62)
-                current_badge_h = self.us(34, 20)
-                current_badge_x = (left_panel_x + left_panel_w) - (current_badge_w / 2)
-                current_badge_y = y - (current_badge_h / 2)
-                self.draw_rounded_rectangle(
-                    current_badge_x,
-                    current_badge_y,
-                    current_badge_w,
-                    current_badge_h,
-                    self.us(18, 10),
-                    fill='#f4d03f',
-                    outline='',
-                    outline_width=0
-                )
-                self.canvas.create_text(
-                    current_badge_x + (current_badge_w / 2),
-                    current_badge_y + (current_badge_h / 2),
-                    text='Current',
-                    font=(ui_family, self.fs(20, 11), 'bold'),
-                    fill='black'
-                )
-
             self.prayer_box_shape_ids[key] = shape_id
             self.prayer_box_bounds[key] = (left_panel_x, y, left_panel_w, row_h)
             self.prayer_box_fill_ids[key] = fill_id
             self.prayer_box_fill_styles[key] = {
-                'x': left_panel_x + self.us(2, 1),
-                'y': y + self.us(2, 1),
-                'width': left_panel_w - self.us(4, 2),
-                'height': row_h - self.us(4, 2),
-                'radius': max(0, corner_radius - self.us(2, 1))
+                'x': left_panel_x,
+                'y': y,
+                'width': left_panel_w,
+                'height': row_h,
+                'radius': corner_radius,
+                'fill_color': fill_color
             }
 
             athan_time = prayers_data.get(f'{key}Athan', '--')
@@ -5868,10 +5870,17 @@ class IslamicBackground:
                     )
             else:
                 name_font_size = row_name_font_size
-                athan_main_size = row_time_main_size
-                athan_suffix_size = row_time_suffix_size
-                iqamah_main_size = row_time_main_size
-                iqamah_suffix_size = row_time_suffix_size
+                athan_main_size = row_time_main_size + self.fs(6, 3)
+                athan_suffix_size = row_time_suffix_size + self.fs(2, 1)
+                iqamah_main_size = row_time_main_size + self.fs(6, 3)
+                iqamah_suffix_size = row_time_suffix_size + self.fs(2, 1)
+                row_title_color = '#1f1406' if is_current else palette['title_text']
+                athan_color = '#2b1d0e' if is_current else palette['athan_text']
+                iqamah_color = '#2b1d0e' if is_current else palette['iqamah_text']
+                if (not is_current) and key in {'Shrouq', 'Asr', 'Isha'}:
+                    row_title_color = '#111111'
+                    athan_color = '#111111'
+                    iqamah_color = '#111111'
                 if key == 'Jummah':
                     iqamah_main_size = self.fs(28, 16)
                     iqamah_suffix_size = self.fs(16, 10)
@@ -5883,7 +5892,7 @@ class IslamicBackground:
                     arabic,
                     (ui_family, name_font_size, 'bold'),
                     (ui_family, name_font_size, 'bold'),
-                    palette['title_text'],
+                    row_title_color,
                     fill_color,
                     anchor='w'
                 )
@@ -5896,16 +5905,16 @@ class IslamicBackground:
                         center_y + self.us(1, 1),
                         text='Khutbah',
                         font=khutbah_font,
-                        fill=palette['title_text'],
+                        fill=row_title_color,
                         anchor='w'
                     )
                 self.draw_time_text_with_meridiem(
-                    left_panel_x + (left_panel_w * 0.41),
+                    col2_x - self.us(60, 34),
                     center_y,
                     athan_time,
                     main_size=athan_main_size,
                     suffix_size=athan_suffix_size,
-                    color=palette['athan_text'],
+                    color=athan_color,
                     anchor='w'
                 )
                 self.draw_time_text_with_meridiem(
@@ -5914,7 +5923,7 @@ class IslamicBackground:
                     iqamah_time,
                     main_size=iqamah_main_size,
                     suffix_size=iqamah_suffix_size,
-                    color=palette['iqamah_text']
+                    color=iqamah_color
                 )
 
         self.next_prayer_athan_time = next_athan
@@ -6146,7 +6155,8 @@ class IslamicBackground:
                 'y': y,
                 'width': width,
                 'height': height,
-                'radius': corner_radius
+                'radius': corner_radius,
+                'fill_color': fill_color
             }
 
         if theme_name == 'elegent':
@@ -6315,6 +6325,8 @@ class IslamicBackground:
         no_outline_mode = (theme_name == 'elegent_v2')
         for prayer_key, shape_id in self.prayer_box_shape_ids.items():
             try:
+                row_style = self.prayer_box_fill_styles.get(prayer_key, {})
+                row_base_fill = row_style.get('fill_color', palette['card_fill'])
                 if prayer_key == blinking_prayer:
                     # Keep base box styling normal; foreground athan overlay handles flashing.
                     self.update_prayer_box_alpha_fill(
@@ -6328,7 +6340,7 @@ class IslamicBackground:
                 else:
                     self.update_prayer_box_alpha_fill(
                         prayer_key,
-                        palette['card_fill'],
+                        row_base_fill,
                         '' if no_outline_mode else palette['card_outline'],
                         0 if no_outline_mode else 3
                     )
@@ -6572,7 +6584,8 @@ class IslamicBackground:
             'y': y,
             'width': width,
             'height': height,
-            'radius': corner_radius
+            'radius': corner_radius,
+            'fill_color': fill_color
         }
         
         # Rotate only the top prayer name (JUMMAH <-> العربية); keep KHUTBAH in English
@@ -6652,7 +6665,8 @@ class IslamicBackground:
             'y': y,
             'width': width,
             'height': height,
-            'radius': corner_radius
+            'radius': corner_radius,
+            'fill_color': fill_color
         }
         
         # Rotating Shrouq name (English/Arabic)
@@ -6758,11 +6772,11 @@ class IslamicBackground:
         # White rounded box like prayer boxes for next prayer info
         panel_height = self.next_prayer_panel_height
         # Align panel top with the top of the Shrouq/Jummah lower row.
-        panel_y1 = self.jummah_box_y + self.us(30, 15)
+        panel_y1 = self.jummah_box_y + ((self.jummah_box_h - panel_height) / 2) + self.us(34, 18)
         line_center_y = panel_y1 + (panel_height / 2)
 
         # Move current time noticeably higher relative to the lower prayer row.
-        current_time_y = self.jummah_box_y + self.jummah_box_h - self.us(20, 10)
+        current_time_y = self.jummah_box_y + self.us(14, 8)
         outline_step = self.us(4, 3)
         outline_offsets = [
             (-outline_step, -outline_step), (-outline_step, 0), (-outline_step, outline_step),
@@ -6847,7 +6861,8 @@ class IslamicBackground:
 
         line_font = ('Arial', line_size, 'bold')
         prefix_font = ('Arial', prefix_size, 'bold')
-        panel_x1 = x - (panel_width / 2)
+        panel_center_x = x + self.us(24, 12)
+        panel_x1 = panel_center_x - (panel_width / 2)
 
         self.next_prayer_panel_id = self.draw_rounded_rectangle(
             panel_x1, panel_y1, panel_width, panel_height, self.next_prayer_panel_radius,
@@ -6859,9 +6874,9 @@ class IslamicBackground:
         max_shift = min(available_shift, float(self.us(24, 12)))
         shift_x = _np_shift_factor * max_shift
 
-        left_x = x - (total_width / 2) + shift_x
+        left_x = panel_center_x - (total_width / 2) + shift_x
 
-        self.next_prayer_line_x = x
+        self.next_prayer_line_x = panel_center_x
         self.next_prayer_line_y = line_center_y
         self.next_prayer_panel_width = panel_width
         self.next_prayer_panel_bounds = (panel_x1, panel_y1, panel_width, panel_height)
@@ -6869,7 +6884,7 @@ class IslamicBackground:
         self._next_prayer_last_text_parts = (prefix_text, name_text, in_text)
         self._next_prayer_last_widths = (prefix_width, name_width, in_width, countdown_width)
         if rtl_mode:
-            right_x = x + (total_width / 2) + shift_x
+            right_x = panel_center_x + (total_width / 2) + shift_x
             self.next_prayer_prefix_text_id = self.canvas.create_text(
                 right_x, line_center_y,
                 text=prefix_text,
@@ -7147,6 +7162,8 @@ class IslamicBackground:
                     if prayer_key == self.last_rendered_current_prayer:
                         fill_color = palette['card_current_fill']
                         outline_color = palette['card_current_outline']
+                    else:
+                        fill_color = style.get('fill_color', palette['card_fill'])
                     break
         except:
             pass

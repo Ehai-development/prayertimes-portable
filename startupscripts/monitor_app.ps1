@@ -11,6 +11,9 @@ $GITHUB_BRANCH = "main"
 $REPO_CONTENT_PREFIX = ""
 $USE_GITHUB_TOKEN = $false
 
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName Microsoft.VisualBasic
+
 $PORTABLE_ROOT = Split-Path -Parent (Split-Path -Parent $APP_EXE)
 $STATE_DIR = Join-Path $PORTABLE_ROOT ".update_state"
 $LAST_SHA_FILE = Join-Path $STATE_DIR "portable_last_sha.txt"
@@ -80,7 +83,7 @@ function Is-NetworkUnavailableError {
 }
 
 function Get-AppProcess {
-    return Get-Process -Name $APP_NAME -ErrorAction SilentlyContinue
+    return Get-Process -Name $APP_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
 }
 
 function Stop-App {
@@ -109,6 +112,74 @@ function Start-App {
         Write-Log "Started $APP_NAME (PID: $($proc.Id))"
     } catch {
         Write-Log "Failed to start ${APP_NAME}: $($_.Exception.Message)"
+    }
+}
+
+function Ensure-AppFullscreen {
+    param([System.Diagnostics.Process]$AppProcess)
+
+    if ($null -eq $AppProcess) {
+        return
+    }
+
+    if (-not ("Win32WindowApi" -as [type])) {
+        Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+
+public static class Win32WindowApi {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct RECT {
+        public int Left;
+        public int Top;
+        public int Right;
+        public int Bottom;
+    }
+
+    [DllImport("user32.dll")]
+    public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+    [DllImport("user32.dll")]
+    public static extern bool ShowWindowAsync(IntPtr hWnd, int nCmdShow);
+}
+"@
+    }
+
+    $AppProcess.Refresh()
+    if ($AppProcess.MainWindowHandle -eq 0) {
+        Write-Log "Fullscreen check skipped: no main window handle yet for PID $($AppProcess.Id)"
+        return
+    }
+
+    $handle = $AppProcess.MainWindowHandle
+    [Win32WindowApi]::ShowWindowAsync($handle, 9) | Out-Null
+    [Win32WindowApi]::SetForegroundWindow($handle) | Out-Null
+
+    $rect = New-Object Win32WindowApi+RECT
+    if (-not [Win32WindowApi]::GetWindowRect($handle, [ref]$rect)) {
+        Write-Log "Fullscreen check failed: unable to read window bounds for PID $($AppProcess.Id)"
+        return
+    }
+
+    $screen = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $isFullscreen = (
+        [Math]::Abs($rect.Left - $screen.Left) -le 2 -and
+        [Math]::Abs($rect.Top - $screen.Top) -le 2 -and
+        [Math]::Abs(($rect.Right - $rect.Left) - $screen.Width) -le 2 -and
+        [Math]::Abs(($rect.Bottom - $rect.Top) - $screen.Height) -le 2
+    )
+
+    if (-not $isFullscreen) {
+        [Microsoft.VisualBasic.Interaction]::AppActivate($AppProcess.Id) | Out-Null
+        Start-Sleep -Milliseconds 150
+        $wshell = New-Object -ComObject WScript.Shell
+        $wshell.SendKeys('{F11}')
+        Write-Log "Fullscreen enforcement: sent F11 to PID $($AppProcess.Id)"
+    } else {
+        Write-Log "Fullscreen enforcement: already fullscreen (PID: $($AppProcess.Id))"
     }
 }
 
@@ -510,8 +581,12 @@ if ($updatedNow -or -not $appProcess) {
         Write-Log "$APP_NAME not running. Starting now..."
     }
     Start-App
+    Start-Sleep -Milliseconds 900
+    $appProcess = Get-AppProcess
+    Ensure-AppFullscreen -AppProcess $appProcess
 } else {
     Write-Log "$APP_NAME is running (PID: $($appProcess.Id))"
+    Ensure-AppFullscreen -AppProcess $appProcess
 }
 
 # Keep last 500 lines of log
