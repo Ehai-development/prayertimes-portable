@@ -274,6 +274,8 @@ class IslamicBackground:
         self.yellow_ribbon_height = 0  # Yellow ribbon height
         self.yellow_ribbon_hidden = False  # Hide/show cycle state
         self.yellow_ribbon_hide_start = 0  # time.time() when hide began
+        self.eid_ribbon_phase = 'english'  # english -> arabic -> english ...
+        self.eid_ribbon_direction = -1  # -1: right-to-left, +1: left-to-right
         self.announcement_tick_ms = 100
         self.yellow_ribbon_tick_ms = 100
         self.salah_names_show_arabic = False
@@ -1217,8 +1219,17 @@ class IslamicBackground:
                 "overwritebglog": "no",
                 "theme": "moon",
                 "arabicchangeevery": 30,
-                "arabicnameduration": 5
+                "arabicnameduration": 5,
+                "Eid Salah": "Eid Fitr Salah at 9:00 AM on Friday March 27 2026\nEid Adha Salah at 9:00 AM on Wednesday May 27 2027"
             }
+
+        # Eid salah schedule lines (one per line):
+        #   <Label> at <h:mm AM/PM> on <Weekday> <Month> <DD> <YYYY>
+        default_eid_salah = (
+            "Eid Fitr Salah at 9:00 AM on Friday March 27 2026\n"
+            "Eid Adha Salah at 9:00 AM on Wednesday May 27 2027"
+        )
+        self.config['Eid Salah'] = str(self.config.get('Eid Salah', self.config.get('eidsalah', default_eid_salah)) or '').strip()
 
         # Visual theme selection
         theme_name = str(self.config.get('theme', 'moon')).strip().lower()
@@ -2232,6 +2243,8 @@ class IslamicBackground:
                     line = line.strip()
                     if not line:
                         continue
+                    if line.startswith('#'):
+                        continue
                     
                     # Parse color if specified
                     color = 'white'  # Default color
@@ -2486,6 +2499,51 @@ class IslamicBackground:
                 return
         except Exception:
             self.dst_change_info = None
+
+    def parse_eid_salah_entries(self):
+        """Parse configured Eid salah schedule lines into datetime entries."""
+        entries = []
+        raw_text = str(self.config.get('Eid Salah', self.config.get('eidsalah', '')) or '')
+        if not raw_text.strip():
+            return entries
+
+        pattern = re.compile(
+            r'^(?P<label>.+?)\s+at\s+(?P<time>\d{1,2}:\d{2}\s*[APap][Mm])\s+on\s+'
+            r'(?P<weekday>[A-Za-z]+)\s+(?P<month>[A-Za-z]+)\s+(?P<day>\d{1,2})\s+(?P<year>\d{4})$'
+        )
+
+        for raw_line in raw_text.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith('#'):
+                continue
+            match = pattern.match(line)
+            if not match:
+                continue
+
+            label = match.group('label').strip()
+            time_str = re.sub(r'\s+', ' ', match.group('time').upper()).strip()
+            date_str = f"{match.group('weekday')} {match.group('month')} {int(match.group('day')):02d} {match.group('year')} {time_str}"
+            try:
+                salah_dt = datetime.strptime(date_str, '%A %B %d %Y %I:%M %p')
+            except:
+                continue
+
+            entries.append({
+                'label': label,
+                'salah_dt': salah_dt,
+                'end_dt': salah_dt + timedelta(hours=1)
+            })
+
+        entries.sort(key=lambda e: e['salah_dt'])
+        return entries
+
+    def get_active_eid_salah_event(self):
+        """Return the next Eid salah event that has not expired yet (until 1 hour after salah)."""
+        now_dt = datetime.combine(self.get_current_date(), self.get_current_time())
+        for event in self.parse_eid_salah_entries():
+            if now_dt <= event['end_dt']:
+                return event
+        return None
     
     def parse_time(self, time_str):
         """Parse time string to datetime object for comparison"""
@@ -5167,6 +5225,9 @@ class IslamicBackground:
                 
                 # Check if there are changes within 2 days (including day of change)
                 has_upcoming_changes = False
+                eid_event = self.get_active_eid_salah_event()
+                if eid_event:
+                    has_upcoming_changes = True
                 if self.upcoming_changes:
                     for prayer_key, info in self.upcoming_changes.items():
                         days_until = info.get('days_until', 0)
@@ -6592,8 +6653,93 @@ class IslamicBackground:
         # days_until = 1 means changes tomorrow -> RED RIBBON + YELLOW RIBBON
         # days_until = 2 means changes in 2 days -> YELLOW RIBBON only
         changes_text = []
-        
-        if self.upcoming_changes:
+        eid_event = self.get_active_eid_salah_event()
+
+        if eid_event:
+            salah_dt = eid_event['salah_dt']
+            eid_time = salah_dt.strftime('%I:%M %p').lstrip('0')
+            eid_date = salah_dt.strftime('%a, %b %d %Y')
+
+            arabic_weekdays = {
+                'Monday': 'الاثنين',
+                'Tuesday': 'الثلاثاء',
+                'Wednesday': 'الأربعاء',
+                'Thursday': 'الخميس',
+                'Friday': 'الجمعة',
+                'Saturday': 'السبت',
+                'Sunday': 'الأحد'
+            }
+            arabic_months = {
+                'January': 'يناير',
+                'February': 'فبراير',
+                'March': 'مارس',
+                'April': 'أبريل',
+                'May': 'مايو',
+                'June': 'يونيو',
+                'July': 'يوليو',
+                'August': 'أغسطس',
+                'September': 'سبتمبر',
+                'October': 'أكتوبر',
+                'November': 'نوفمبر',
+                'December': 'ديسمبر'
+            }
+            arabic_period = 'صباحًا' if salah_dt.strftime('%p') == 'AM' else 'مساءً'
+            arabic_time = f"{salah_dt.strftime('%I').lstrip('0') or '12'}:{salah_dt.strftime('%M')}"
+            arabic_day = arabic_weekdays.get(salah_dt.strftime('%A'), salah_dt.strftime('%A'))
+            arabic_month = arabic_months.get(salah_dt.strftime('%B'), salah_dt.strftime('%B'))
+            arabic_time_token = f"{arabic_time} {arabic_period}"
+            if self.eid_ribbon_phase == 'arabic':
+                # Arabic pass: left-to-right
+                self.eid_ribbon_direction = 1
+                changes_text.append({
+                    # Single Arabic segment keeps word order stable across font/render changes.
+                    'prefix': '',
+                    'new_time': '',
+                    'suffix': f"\u202Bصلاة عيد الأضحى الساعة {arabic_time_token} يوم {arabic_day} {salah_dt.day} {arabic_month} {salah_dt.year}\u202C",
+                    'prefix_color': 'black',
+                    'new_time_color': 'black',
+                    'suffix_color': 'black'
+                })
+            else:
+                # English pass: right-to-left
+                self.eid_ribbon_phase = 'english'
+                self.eid_ribbon_direction = -1
+                changes_text.append({
+                    'prefix': f"{eid_event['label']} at ",
+                    'new_time': eid_time,
+                    'suffix': f" on {eid_date}",
+                    'prefix_color': 'black',
+                    'new_time_color': '#d32f2f',
+                    'suffix_color': 'black'
+                })
+
+            # Repeated bilingual watermark pattern behind scrolling text.
+            watermark_step = self.us(420, 240)
+            pair_offset = self.us(230, 130)
+            row_y_positions = [y + (height * 0.32), y + (height * 0.68)]
+            for row_index, row_y in enumerate(row_y_positions):
+                start_x = x + (watermark_step / 2)
+                if row_index % 2 == 1:
+                    start_x += watermark_step / 2
+                current_wm_x = start_x
+                while current_wm_x < (x + width):
+                    self.canvas.create_text(
+                        current_wm_x,
+                        row_y,
+                        text='EID MUBARAK',
+                        font=('Arial', self.fs(24, 10), 'bold'),
+                        fill='#f5e788'
+                    )
+                    self.canvas.create_text(
+                        current_wm_x + pair_offset,
+                        row_y,
+                        text='عيد مبارك',
+                        font=('Arial', self.fs(24, 10), 'bold'),
+                        fill='#f5e788'
+                    )
+                    current_wm_x += watermark_step
+
+        if (not eid_event) and self.upcoming_changes:
             for prayer_key, info in self.upcoming_changes.items():
                 days_until = info.get('days_until', 0)
                 # Yellow ribbon: show changes within 2 days (including day of change)
@@ -6618,7 +6764,7 @@ class IslamicBackground:
                         'suffix': f" on {change_date_str}"
                     })
 
-        if self.dst_change_info:
+        if (not eid_event) and self.dst_change_info:
             dst_days_until = self.dst_change_info.get('days_until', 99)
             if 0 <= dst_days_until <= 2:
                 change_date = self.dst_change_info.get('change_date')
@@ -6637,16 +6783,19 @@ class IslamicBackground:
             # Create text objects for each change with separators
             for i, change_item in enumerate(changes_text):
                 segments = [
-                    (change_item['prefix'], 'black'),
-                    (change_item['new_time'], '#d32f2f'),
-                    (change_item['suffix'], 'black')
+                    (change_item['prefix'], change_item.get('prefix_color', 'black')),
+                    (change_item['new_time'], change_item.get('new_time_color', '#d32f2f')),
+                    (change_item['suffix'], change_item.get('suffix_color', 'black'))
                 ]
 
                 for segment_text, segment_color in segments:
+                    if not segment_text:
+                        continue
+                    ribbon_font = ('Arial', self.fs(40, 14), 'bold')
                     text_id = self.canvas.create_text(
                         x + current_x, y + height/2,
                         text=segment_text,
-                        font=('Arial', self.fs(40, 14), 'bold'),
+                        font=ribbon_font,
                         fill=segment_color,
                         anchor='w'
                     )
@@ -6678,14 +6827,27 @@ class IslamicBackground:
                     current_x += sep_width + self.us(10, 4)
             
             # Calculate total width for looping (same approach as announcement ticker)
-            self.yellow_ribbon_total_width = (width - self.yellow_ribbon_x_positions[0] if self.yellow_ribbon_x_positions else 0)
-            if self.yellow_ribbon_text_ids:
-                last_item = self.yellow_ribbon_text_ids[-1]
-                self.yellow_ribbon_total_width = self.yellow_ribbon_x_positions[-1] + last_item[3] + self.us(80, 24)
+            self.yellow_ribbon_total_width = 0
+            if self.yellow_ribbon_text_ids and self.yellow_ribbon_x_positions:
+                max_end = 0
+                for idx, item in enumerate(self.yellow_ribbon_text_ids):
+                    if idx < len(self.yellow_ribbon_x_positions):
+                        end_x = self.yellow_ribbon_x_positions[idx] + item[3]
+                        if end_x > max_end:
+                            max_end = end_x
+                self.yellow_ribbon_total_width = max_end + self.us(80, 24)
 
             # Keep existing scroll offset so redraws don't visibly restart the ticker.
             if not hasattr(self, 'yellow_ribbon_x_pos'):
                 self.yellow_ribbon_x_pos = 0
+
+            # For Eid language phases, initialize entry side per direction.
+            if eid_event and self.yellow_ribbon_x_pos == 0:
+                if self.eid_ribbon_direction > 0:
+                    self.yellow_ribbon_x_pos = -self.yellow_ribbon_total_width
+                else:
+                    # Start just off-screen right so text appears quickly after ribbon shows.
+                    self.yellow_ribbon_x_pos = 0
 
             # Immediately position text at current scroll offset to avoid flicker on redraw
             if self.yellow_ribbon_x_pos != 0:
@@ -6857,6 +7019,7 @@ class IslamicBackground:
         """Update the scrolling yellow ribbon text - scroll continuously"""
         _t0 = datetime.now() if ENABLE_PERF_TRACE else None
         try:
+            eid_event = self.get_active_eid_salah_event()
             # Handle hidden phase: wait for hide duration then unhide
             if self.yellow_ribbon_hidden:
                 import time as _time
@@ -6868,8 +7031,12 @@ class IslamicBackground:
                 # Skip scrolling while hidden
             elif self.yellow_ribbon_text_ids and len(self.yellow_ribbon_text_ids) > 0:
                 try:
-                    # Move all text objects left
-                    self.yellow_ribbon_x_pos -= 7  # Match announcement scroll speed
+                    # Eid alternates language passes with opposite directions.
+                    step = 7
+                    if eid_event:
+                        self.yellow_ribbon_x_pos += (step * self.eid_ribbon_direction)
+                    else:
+                        self.yellow_ribbon_x_pos -= step  # Match announcement scroll speed
                     
                     # Update position for all text objects
                     for i, (text_id, text, color, width) in enumerate(self.yellow_ribbon_text_ids):
@@ -6882,7 +7049,33 @@ class IslamicBackground:
                             )
                     
                     # Check if all text has scrolled off screen
-                    if self.yellow_ribbon_x_pos < -self.yellow_ribbon_total_width:
+                    if eid_event:
+                        completed = False
+                        if self.eid_ribbon_direction < 0 and self.yellow_ribbon_x_pos < -self.yellow_ribbon_total_width:
+                            completed = True
+                        # For left-to-right pass, x_pos > 0 means the whole message has exited.
+                        if self.eid_ribbon_direction > 0 and self.yellow_ribbon_x_pos > 0:
+                            completed = True
+
+                        if completed:
+                            if self.eid_ribbon_phase == 'english':
+                                # Immediately follow with Arabic pass.
+                                self.eid_ribbon_phase = 'arabic'
+                                self.yellow_ribbon_x_pos = 0
+                                self.redraw_full_display()
+                            else:
+                                # Arabic finished; return to English and apply configured hide cycle.
+                                self.eid_ribbon_phase = 'english'
+                                if self.news_tape_hide_duration > 0:
+                                    import time as _time
+                                    self.yellow_ribbon_hidden = True
+                                    self.yellow_ribbon_hide_start = _time.time()
+                                    self.yellow_ribbon_text_ids = []
+                                    self.redraw_full_display()
+                                else:
+                                    self.yellow_ribbon_x_pos = 0
+                                    self.redraw_full_display()
+                    elif self.yellow_ribbon_x_pos < -self.yellow_ribbon_total_width:
                         if self.news_tape_hide_duration > 0:
                             # Enter hide phase
                             import time as _time
