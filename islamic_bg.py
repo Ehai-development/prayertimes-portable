@@ -286,6 +286,8 @@ class IslamicBackground:
         self.salah_name_transition_duration_ms = 280
         self.salah_name_transition_progress = 1.0
         self.salah_name_transition_tick_ms = 45
+        self.salah_name_specs = []
+        self.salah_name_canvas_ids = []
         
         # Jummah time (loaded from CSV or config/jummah.txt)
         self.jummah_time = None
@@ -598,6 +600,8 @@ class IslamicBackground:
         """Pulse a glow on the current prayer box border every few seconds."""
         try:
             if not self.iqamah_overlay_visible and not self._is_full_redraw:
+                theme_name = self.get_theme_name()
+                no_outline_mode = (theme_name == 'elegent_v2')
                 # Advance phase 0..1 for a full pulse cycle.
                 step = self.glow_tick_ms / 1000.0 / self.glow_cycle_seconds
                 self._glow_phase = (self._glow_phase + step) % 1.0
@@ -614,13 +618,15 @@ class IslamicBackground:
                 current = self.last_rendered_current_prayer
                 if current and current in self.prayer_box_fill_ids and self.athan_callout_prayer is None:
                     palette = self.get_theme_palette()
-                    outline_width = self.us(4, 2) + int(round(self.us(2, 1) * pulse))
+                    outline_width = 0 if no_outline_mode else (self.us(4, 2) + int(round(self.us(2, 1) * pulse)))
                     outline_alpha = 150 + int(round(90 * pulse))
                     glow_outline = self._mix_hex_color(
                         palette['card_current_outline'],
                         '#fff1a8',
                         0.65 * pulse
                     )
+                    if no_outline_mode:
+                        glow_outline = ''
                     glow_fill = self._mix_hex_color(
                         palette['card_current_fill'],
                         '#fff8d9',
@@ -802,6 +808,10 @@ class IslamicBackground:
             return
 
         if theme == 'elegent':
+            self.draw_elegent_background(width, height)
+            return
+
+        if theme == 'elegent_v2':
             self.draw_elegent_background(width, height)
             return
 
@@ -1233,9 +1243,11 @@ class IslamicBackground:
 
         # Visual theme selection
         theme_name = str(self.config.get('theme', 'moon')).strip().lower()
-        if theme_name in ('elegent', 'elegant'):
+        if theme_name in ('elegent_v2', 'elegent v2', 'elegent v2.0', 'elegent_v2.0', 'elegant_v2', 'elegant v2', 'elegant v2.0', 'elegant_v2.0'):
+            theme_name = 'elegent_v2'
+        elif theme_name in ('elegent', 'elegant'):
             theme_name = 'modern'
-        if theme_name not in ('moon', 'modern', 'ramadan', 'elegent'):
+        if theme_name not in ('moon', 'modern', 'ramadan', 'elegent', 'elegent_v2'):
             theme_name = 'moon'
         self.config['theme'] = theme_name
 
@@ -1284,6 +1296,22 @@ class IslamicBackground:
         except:
             shrouq_plus_minutes = 10
         self.config['shrouqplus'] = shrouq_plus_minutes
+
+        # Red prayer-change ribbon visibility timings (seconds)
+        try:
+            red_ribbon_show_seconds = int(self.config.get('redribbonshow', 15))
+            red_ribbon_show_seconds = max(1, red_ribbon_show_seconds)
+        except:
+            red_ribbon_show_seconds = 15
+        try:
+            red_ribbon_hide_seconds = int(self.config.get('redribbonhide', 45))
+            red_ribbon_hide_seconds = max(1, red_ribbon_hide_seconds)
+        except:
+            red_ribbon_hide_seconds = 45
+        self.config['redribbonshow'] = red_ribbon_show_seconds
+        self.config['redribbonhide'] = red_ribbon_hide_seconds
+        self.red_ribbon_show_seconds = red_ribbon_show_seconds
+        self.red_ribbon_hide_seconds = red_ribbon_hide_seconds
 
         # Show logs (console print output) - default No
         showlogs_val = str(self.config.get('showlogs', 'no')).strip().lower()
@@ -1659,9 +1687,11 @@ class IslamicBackground:
     def get_theme_name(self):
         """Get normalized theme name from config."""
         theme_name = str(self.config.get('theme', 'moon')).strip().lower()
+        if theme_name in ('elegent_v2', 'elegent v2', 'elegent v2.0', 'elegent_v2.0', 'elegant_v2', 'elegant v2', 'elegant v2.0', 'elegant_v2.0'):
+            return 'elegent_v2'
         if theme_name in ('elegent', 'elegant'):
             return 'modern'
-        if theme_name not in ('moon', 'modern', 'ramadan', 'elegent'):
+        if theme_name not in ('moon', 'modern', 'ramadan', 'elegent', 'elegent_v2'):
             return 'moon'
         return theme_name
 
@@ -1708,6 +1738,28 @@ class IslamicBackground:
                 'next_in_text': '#2c1f12',
                 'next_countdown_text': '#1f6b4f',
                 'header_line': '#c39b45',
+                'verse_box': '#1e2742',
+                'build_info_text': '#f4ecd9'
+            }
+
+        if theme_name == 'elegent_v2':
+            return {
+                'card_fill': '#0d2a66',
+                'card_outline': '#3a5ea8',
+                'card_current_fill': '#2f67c7',
+                'card_current_outline': '#9ec5ff',
+                'title_text': '#eef5ff',
+                'subtle_text': '#c8dbff',
+                'athan_text': '#f5f9ff',
+                'iqamah_text': '#d9eaff',
+                'shrouq_note_text': '#2e7d32',
+                'next_panel_fill': '#fff8e8',
+                'next_panel_outline': '#8a6a2b',
+                'next_prefix_text': '#2b1d0e',
+                'next_name_text': '#8f1d1d',
+                'next_in_text': '#2b1d0e',
+                'next_countdown_text': '#165f3f',
+                'header_line': '#c9a24f',
                 'verse_box': '#1e2742',
                 'build_info_text': '#f4ecd9'
             }
@@ -2727,6 +2779,35 @@ class IslamicBackground:
         # If no prayer found, next is Fajr (tomorrow)
         fajr_athan = self.parse_time(prayers_data.get('FajrAthan', ''))
         return 'Fajr', fajr_athan
+
+    def get_next_iqamah_prayer_key(self, prayers_data):
+        """Return prayer row key for the next upcoming iqamah (athan-independent)."""
+        current_time = self.get_current_time()
+        is_friday = (self.get_current_date().weekday() == 4)
+
+        if is_friday:
+            schedule = [
+                ('Fajr', self.parse_time(prayers_data.get('FajrIqama', ''))),
+                ('Jummah', (self.jummah_time or self.parse_time('1:30 PM'))),
+                ('Duhr', self.parse_time('2:15 PM')),
+                ('Asr', self.parse_time(prayers_data.get('AsrIqama', ''))),
+                ('Maghrib', self.parse_time(prayers_data.get('MaghribIqama', ''))),
+                ('Isha', self.parse_time(prayers_data.get('IshaIqama', '')))
+            ]
+        else:
+            schedule = [
+                ('Fajr', self.parse_time(prayers_data.get('FajrIqama', ''))),
+                ('Duhr', self.parse_time(prayers_data.get('DuhrIqama', ''))),
+                ('Asr', self.parse_time(prayers_data.get('AsrIqama', ''))),
+                ('Maghrib', self.parse_time(prayers_data.get('MaghribIqama', ''))),
+                ('Isha', self.parse_time(prayers_data.get('IshaIqama', '')))
+            ]
+
+        for prayer_key, iqamah_time in schedule:
+            if iqamah_time and current_time < iqamah_time:
+                return prayer_key
+
+        return 'Fajr'
     
     def get_countdown(self, target_time):
         """Get countdown text to target time in HH:MM:SS format"""
@@ -4574,12 +4655,56 @@ class IslamicBackground:
         masjid_name = self.config.get('masjid_name', 'MASJID')
         address = self.config.get('location', 'Address')
 
-        # Draw masjid name below the ayah and translation
+        # Show date at the former masjid-name position.
+        current_date = self.get_current_date()
+        show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+
+        english_day_text = current_date.strftime('%A')
+        english_miladi_text = current_date.strftime('%B %d, %Y')
+        arabic_weekdays = {
+            0: 'الاثنين',
+            1: 'الثلاثاء',
+            2: 'الأربعاء',
+            3: 'الخميس',
+            4: 'الجمعة',
+            5: 'السبت',
+            6: 'الأحد'
+        }
+        arabic_months = {
+            1: 'يناير', 2: 'فبراير', 3: 'مارس', 4: 'أبريل',
+            5: 'مايو', 6: 'يونيو', 7: 'يوليو', 8: 'أغسطس',
+            9: 'سبتمبر', 10: 'أكتوبر', 11: 'نوفمبر', 12: 'ديسمبر'
+        }
+        arabic_day_text = arabic_weekdays.get(current_date.weekday(), english_day_text)
+        arabic_miladi_text = f"{current_date.day} {arabic_months.get(current_date.month, '')} {current_date.year}"
+
+        day_text = arabic_day_text if show_arabic_name else english_day_text
+        miladi_text = arabic_miladi_text if show_arabic_name else english_miladi_text
+        if Gregorian:
+            try:
+                hijri = Gregorian(current_date.year, current_date.month, current_date.day).to_hijri()
+                english_hijri_text = f"{hijri.day} {self.get_hijri_month_name(hijri.month)} {hijri.year}H"
+                arabic_hijri_months = {
+                    1: 'محرم', 2: 'صفر', 3: 'ربيع الأول', 4: 'ربيع الآخر',
+                    5: 'جمادى الأولى', 6: 'جمادى الآخرة', 7: 'رجب', 8: 'شعبان',
+                    9: 'رمضان', 10: 'شوال', 11: 'ذو القعدة', 12: 'ذو الحجة'
+                }
+                arabic_hijri_text = f"{hijri.day} {arabic_hijri_months.get(hijri.month, '')} {hijri.year}هـ"
+                hijri_text = arabic_hijri_text if show_arabic_name else english_hijri_text
+            except:
+                hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
+        else:
+            hijri_text = 'التاريخ الهجري غير متاح' if show_arabic_name else 'Hijri date unavailable'
+
+        date_font = ('Arial', self.fs(42, 24), 'bold') if show_arabic_name else ('Arial', self.fs(36, 20), 'bold')
         self.draw_outlined_text(
             width / 2, self.us(185),
-            text=masjid_name,
-            font=('Arial', self.fs(44, 18), 'bold'),
-            fill='white'
+            text=f"{day_text} | {hijri_text} | {miladi_text}",
+            font=date_font,
+            fill='white',
+            outline='black',
+            outline_px=self.us(3, 2),
+            anchor='center'
         )
 
     def draw_top_right_logo(self, width, height):
@@ -4897,17 +5022,16 @@ class IslamicBackground:
             pass
 
     def draw_weather(self, width, height):
-        """Draw weather as 3 compact rows: Now, tomorrow, day after tomorrow."""
+        """Draw weather as 3 compact horizontal cards under current time."""
         if not self.weather_data:
             return
 
-        x_start = self.us(20, 10)
-        y_start = self.us(100, 50)
-        row_h = self.us(50, 25)
-        row_w = self.us(310, 155)
-        row_gap = self.us(4, 2)
-        padding_x = self.us(14, 7)
-        corner_r = self.us(10, 5)
+        card_h = self.us(86, 46)
+        card_w = self.us(210, 118)
+        card_gap = self.us(10, 6)
+        padding_x = self.us(12, 7)
+        corner_r = self.us(12, 6)
+        weather_y_offset = self.us(32, 18)
 
         # Icon color mapping
         icon_colors = {
@@ -4920,51 +5044,75 @@ class IslamicBackground:
             '⛈': '#DA70D6',   # orchid / thunderstorm
         }
 
-        # Build row data: (label, icon, temp_text)
-        rows = []
-        rows.append(('Now', self.weather_data['current_icon'],
-                      f"{self.weather_data['current_temp']}°C"))
+        # Build card data: (label, icon, temp_text)
+        cards = []
+        cards.append((
+            'Now',
+            self.weather_data.get('current_icon', '☁'),
+            f"{self.weather_data.get('current_temp', '--')}°C"
+        ))
 
         forecast = self.weather_data.get('forecast', [])
         for day in forecast[:2]:
-            rows.append((day['day'], day['icon'],
-                          f"{day['high']}° / {day['low']}°"))
+            cards.append((
+                day.get('day', '--'),
+                day.get('icon', '☁'),
+                f"{day.get('high', '--')}° / {day.get('low', '--')}°"
+            ))
+
+        card_count = max(1, len(cards))
+        total_w = (card_count * card_w) + ((card_count - 1) * card_gap)
+
+        if self.get_theme_name() == 'elegent_v2':
+            left_panel_x = self.us(36, 18)
+            left_panel_w = min(self.us(880, 550), max(self.us(590, 360), width * 0.50))
+            right_area_x1 = left_panel_x + left_panel_w + self.us(26, 16)
+            right_area_w = max(self.us(320, 200), width - right_area_x1 - self.us(34, 18))
+            right_center_x = right_area_x1 + (right_area_w / 2)
+            x_start = right_center_x - (total_w / 2)
+            y_start = self.jummah_box_y + self.jummah_box_h + self.us(12, 8) + weather_y_offset
+            min_x = right_area_x1 + self.us(4, 2)
+            max_x = right_area_x1 + right_area_w - total_w - self.us(4, 2)
+            x_start = max(min_x, min(max_x, x_start))
+        else:
+            x_start = width - total_w - self.us(20, 10)
+            y_start = height - card_h - self.us(45, 22) + weather_y_offset
 
         # Keep references to prevent garbage collection
         if not hasattr(self, '_weather_row_images'):
             self._weather_row_images = []
         self._weather_row_images.clear()
 
-        label_font = self.fs(24, 12)
+        label_font = self.fs(20, 11)
         icon_font = self.fs(26, 13)
-        temp_font = self.fs(32, 16)
+        temp_font = self.fs(26, 14)
 
-        for i, (label, icon, temp_text) in enumerate(rows):
-            ry = y_start + i * (row_h + row_gap)
+        for i, (label, icon, temp_text) in enumerate(cards):
+            rx = x_start + i * (card_w + card_gap)
 
-            # Semi-transparent rounded row background
+            # Semi-transparent rounded card background
             try:
-                bg_img = Image.new('RGBA', (row_w, row_h), (0, 0, 0, 0))
+                bg_img = Image.new('RGBA', (card_w, card_h), (0, 0, 0, 0))
                 draw = ImageDraw.Draw(bg_img)
                 r = corner_r
-                # "Now" row slightly brighter, forecast rows darker
+                # "Now" card slightly brighter, forecast cards darker
                 bg_color = (20, 40, 70, 160) if i == 0 else (10, 20, 40, 140)
                 draw.rounded_rectangle(
-                    [(0, 0), (row_w - 1, row_h - 1)],
+                    [(0, 0), (card_w - 1, card_h - 1)],
                     radius=r, fill=bg_color
                 )
                 tk_img = ImageTk.PhotoImage(bg_img)
                 self._weather_row_images.append(tk_img)
                 self.canvas.create_image(
-                    x_start, ry, image=tk_img, anchor='nw',
+                    rx, y_start, image=tk_img, anchor='nw',
                     tags='weather_row'
                 )
             except Exception:
                 pass
 
-            # Day label (left-aligned)
+            # Label near top-left
             self.canvas.create_text(
-                x_start + padding_x, ry + row_h // 2,
+                rx + padding_x, y_start + self.us(16, 9),
                 text=label,
                 font=('Arial', label_font, 'bold'),
                 fill='#e0e8f0' if i == 0 else '#a0b8d0',
@@ -4972,10 +5120,10 @@ class IslamicBackground:
                 tags='weather_row'
             )
 
-            # Weather icon (center area) — colored per icon type
+            # Icon in lower-left area
             icon_color = icon_colors.get(icon, '#ffffff')
             self.canvas.create_text(
-                x_start + self.us(100, 50), ry + row_h // 2,
+                rx + padding_x, y_start + card_h - self.us(24, 12),
                 text=icon,
                 font=('Segoe UI Emoji', icon_font),
                 fill=icon_color,
@@ -4983,9 +5131,9 @@ class IslamicBackground:
                 tags='weather_row'
             )
 
-            # Temperature (right-aligned)
+            # Temperature on right side
             self.canvas.create_text(
-                x_start + row_w - padding_x, ry + row_h // 2,
+                rx + card_w - padding_x, y_start + card_h - self.us(24, 12),
                 text=temp_text,
                 font=('Arial', temp_font, 'bold'),
                 fill='#ffffff' if i == 0 else '#c0d8e8',
@@ -5099,12 +5247,14 @@ class IslamicBackground:
         
         # Define prayers to display
         prayers = [
-            ('FAJR', 'Fajr', 'الفجر'),
-            ('DHUHR', 'Duhr', 'الظهر'),
-            ('ASR', 'Asr', 'العصر'),
-            ('MAGHRIB', 'Maghrib', 'المغرب'),
-            ('ISHA', 'Isha', 'العشاء')
+            ('Fajr', 'Fajr', 'الفجر'),
+            ('Dhuhr', 'Duhr', 'الظهر'),
+            ('Asr', 'Asr', 'العصر'),
+            ('Maghrib', 'Maghrib', 'المغرب'),
+            ('Isha', 'Isha', 'العشاء')
         ]
+        prayers_with_shrouq = prayers[:1] + [('Shrouq', 'Shrouq', 'الشروق')] + prayers[1:]
+        prayers_with_shrouq_jummah = prayers_with_shrouq + [('Jummah', 'Jummah', 'الجمعة')]
 
         # Reset box shape tracking for current frame
         self.prayer_box_shape_ids = {}
@@ -5114,8 +5264,20 @@ class IslamicBackground:
         current_prayer = self.get_current_prayer(prayers_data)
         self.last_rendered_current_prayer = current_prayer
 
-        if self.get_theme_name() == 'elegent':
-            self.draw_elegent_compact_prayer_table(width, height, prayers_data, prayers, current_prayer)
+        theme_name = self.get_theme_name()
+        if theme_name == 'elegent_v2':
+            self.draw_elegent_v2_left_prayer_table(width, height, prayers_data, prayers_with_shrouq_jummah, current_prayer)
+            self.draw_top_right_logo(width, height)
+            if self.is_eid_day(self.get_current_date()):
+                self.canvas.delete('animated_eid')
+                self.draw_eid_fireworks(width, height, animated=True, tags='animated_eid')
+                self.draw_eid_balloons(width, height, animated=True, tags='animated_eid')
+                self.canvas.tag_raise('animated_eid')
+            self.draw_build_info(width, height)
+            return
+
+        if theme_name == 'elegent':
+            self.draw_elegent_compact_prayer_table(width, height, prayers_data, prayers_with_shrouq, current_prayer)
             self.draw_build_info(width, height)
             return
         
@@ -5289,6 +5451,8 @@ class IslamicBackground:
 
         self.prayer_box_shape_ids = {}
         self.prayer_box_bounds = {}
+        self.salah_name_specs = []
+        self.salah_name_canvas_ids = []
 
         table_w = min(self.us(1540, 940), width - self.us(120, 50))
         table_h = self.us(610, 360)
@@ -5322,9 +5486,9 @@ class IslamicBackground:
         col_athan_x = table_x + (table_w * 0.58)
         col_iqamah_x = table_x + (table_w * 0.82)
 
-        self.canvas.create_text(col_name_x, table_y + (header_h / 2) + self.us(8, 4), text='SALAH', font=('Arial', self.fs(28, 14), 'bold'), fill=palette['title_text'])
-        self.canvas.create_text(col_athan_x, table_y + (header_h / 2) + self.us(8, 4), text='ATHAN', font=('Arial', self.fs(28, 14), 'bold'), fill=palette['title_text'])
-        self.canvas.create_text(col_iqamah_x, table_y + (header_h / 2) + self.us(8, 4), text='IQAMAH', font=('Arial', self.fs(28, 14), 'bold'), fill=palette['title_text'])
+        self.canvas.create_text(col_name_x, table_y + (header_h / 2) + self.us(8, 4), text='Salah', font=('Arial', self.fs(28, 14), 'bold'), fill=palette['title_text'])
+        self.canvas.create_text(col_athan_x, table_y + (header_h / 2) + self.us(8, 4), text='Athan', font=('Arial', self.fs(28, 14), 'bold'), fill=palette['title_text'])
+        self.canvas.create_text(col_iqamah_x, table_y + (header_h / 2) + self.us(8, 4), text='Iqamah', font=('Arial', self.fs(28, 14), 'bold'), fill=palette['title_text'])
 
         row_area_y = table_y + header_h + self.us(20, 10)
         row_h = (table_h - header_h - self.us(34, 18)) / len(prayers)
@@ -5374,6 +5538,15 @@ class IslamicBackground:
 
             athan_time = prayers_data.get(f'{key}Athan', '--')
             iqamah_time = prayers_data.get(f'{key}Iqama', '--')
+            if key == 'Shrouq':
+                athan_time, _ = self.resolve_sunrise_time(prayers_data)
+                if athan_time != '--' and 'AM' not in athan_time and 'PM' not in athan_time:
+                    athan_time = athan_time + ' AM'
+                shrouq_plus = int(self.config.get('shrouqplus', 10))
+                iqamah_time = f'+{shrouq_plus} MIN'
+            if key == 'Jummah':
+                athan_time = '1:30 PM'
+                iqamah_time = 'All Year Long'
             if key == 'Fajr':
                 if athan_time != '--' and 'AM' not in athan_time and 'PM' not in athan_time:
                     athan_time = athan_time + ' AM'
@@ -5393,21 +5566,481 @@ class IslamicBackground:
             self.draw_time_text_with_meridiem(col_athan_x, y1 + (row_h / 2), athan_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['athan_text'])
             self.draw_time_text_with_meridiem(col_iqamah_x, y1 + (row_h / 2), iqamah_time, main_size=self.fs(36, 18), suffix_size=self.fs(18, 9), color=palette['iqamah_text'])
 
-    def draw_salah_name_transition_text(self, x, y, english_text, arabic_text, english_font, arabic_font, fill_color, background_color, anchor='center'):
+    def draw_elegent_v2_left_prayer_table(self, width, height, prayers_data, prayers, current_prayer):
+        """Draw elegent_v2 as a boxed table on the left side: Prayer | Athan | Iqamah."""
+        palette = self.get_theme_palette()
+        next_prayer_name, next_athan = self.get_next_prayer(prayers_data)
+        next_prayer_key = self.get_next_iqamah_prayer_key(prayers_data)
+
+        self.prayer_box_shape_ids = {}
+        self.prayer_box_bounds = {}
+        self.salah_name_specs = []
+        self.salah_name_canvas_ids = []
+
+        left_panel_x = self.us(36, 18)
+        left_panel_y = self.us(290, 185)
+        left_panel_w = min(self.us(880, 550), max(self.us(590, 360), width * 0.50))
+
+        cards_bottom_margin = self.us(170, 100)
+        row_gap = self.us(5, 3)
+        header_font_size = self.fs(30, 16)
+        row_name_font_size = self.fs(48, 27)
+        row_time_main_size = self.fs(52, 29)
+        row_time_suffix_size = self.fs(26, 15)
+        header_h = header_font_size + self.us(24, 14)
+        row_content_h = max(row_name_font_size, row_time_main_size)
+        row_h = row_content_h + self.us(12, 6)
+        min_required_h = header_h + row_gap + (row_h * len(prayers)) + (row_gap * (len(prayers) - 1))
+        max_h = max(self.us(520, 320), height - left_panel_y - cards_bottom_margin)
+        if min_required_h > max_h:
+            # Keep text readable while ensuring the full table fits on shorter screens.
+            shrink_ratio = max_h / min_required_h
+            header_font_size = max(self.fs(24, 13), int(header_font_size * shrink_ratio))
+            row_name_font_size = max(self.fs(36, 20), int(row_name_font_size * shrink_ratio))
+            row_time_main_size = max(self.fs(40, 22), int(row_time_main_size * shrink_ratio))
+            row_time_suffix_size = max(self.fs(20, 11), int(row_time_suffix_size * shrink_ratio))
+            header_h = header_font_size + self.us(20, 12)
+            row_content_h = max(row_name_font_size, row_time_main_size)
+            row_h = row_content_h + self.us(10, 5)
+
+        col1_x = left_panel_x + (left_panel_w * 0.21)
+        col2_x = left_panel_x + (left_panel_w * 0.52)
+        col3_x = left_panel_x + (left_panel_w * 0.84)
+
+        header_shape_id = self.draw_rounded_rectangle(
+            left_panel_x,
+            left_panel_y,
+            left_panel_w,
+            header_h,
+            self.us(18, 10),
+            fill='',
+            outline='',
+            outline_width=0
+        )
+        header_fill_id = self.draw_alpha_fill(
+            left_panel_x + self.us(2, 1),
+            left_panel_y + self.us(2, 1),
+            left_panel_w - self.us(4, 2),
+            header_h - self.us(4, 2),
+            fill_color=palette['card_fill'],
+            opacity_percent=self.prayer_box_opacity_percent,
+            radius=self.us(16, 9)
+        )
+        self.canvas.tag_lower(header_fill_id, header_shape_id)
+
+        header_y = left_panel_y + (header_h / 2)
+        self.draw_salah_name_transition_text(
+            left_panel_x + self.us(20, 12),
+            header_y,
+            'Prayer',
+            'الصلاة',
+            ('Arial', header_font_size, 'bold'),
+            ('Arial', header_font_size, 'bold'),
+            palette['title_text'],
+            '#f3e3b8',
+            anchor='w'
+        )
+        self.draw_salah_name_transition_text(
+            col2_x,
+            header_y,
+            'Athan',
+            'الأذان',
+            ('Arial', header_font_size, 'bold'),
+            ('Arial', header_font_size, 'bold'),
+            palette['title_text'],
+            '#f3e3b8',
+            anchor='center'
+        )
+        self.draw_salah_name_transition_text(
+            col3_x,
+            header_y,
+            'Iqamah',
+            'الإقامة',
+            ('Arial', header_font_size, 'bold'),
+            ('Arial', header_font_size, 'bold'),
+            palette['title_text'],
+            '#f3e3b8',
+            anchor='center'
+        )
+
+        for idx, (display_name, key, arabic) in enumerate(prayers):
+            is_current = (key == current_prayer)
+            y = left_panel_y + header_h + row_gap + (idx * (row_h + row_gap))
+            change_info = self.changing_prayers.get(key, {}) if key in self.changing_prayers else {}
+            tomorrow_iqamah_overlay = (change_info.get('tomorrow_iqama') or '--').strip()
+            has_change_overlay = bool(tomorrow_iqamah_overlay and tomorrow_iqamah_overlay != '--' and self.ribbon_visible)
+            if has_change_overlay and key == 'Fajr' and 'AM' not in tomorrow_iqamah_overlay and 'PM' not in tomorrow_iqamah_overlay:
+                tomorrow_iqamah_overlay = tomorrow_iqamah_overlay + ' AM'
+
+            fill_color = palette['card_current_fill'] if is_current else palette['card_fill']
+            corner_radius = self.us(18, 10)
+
+            shape_id = self.draw_rounded_rectangle(
+                left_panel_x,
+                y,
+                left_panel_w,
+                row_h,
+                corner_radius,
+                fill='',
+                outline='',
+                outline_width=0
+            )
+
+            fill_id = self.draw_alpha_fill(
+                left_panel_x + self.us(2, 1),
+                y + self.us(2, 1),
+                left_panel_w - self.us(4, 2),
+                row_h - self.us(4, 2),
+                fill_color=fill_color,
+                opacity_percent=self.prayer_box_opacity_percent,
+                radius=max(0, corner_radius - self.us(2, 1))
+            )
+            self.canvas.tag_lower(fill_id, shape_id)
+
+            if key == next_prayer_key and not has_change_overlay:
+                badge_w = self.us(92, 52)
+                badge_h = self.us(34, 20)
+                badge_x = (left_panel_x + left_panel_w) - (badge_w / 2)
+                badge_y = y - (badge_h / 2)
+                self.draw_rounded_rectangle(
+                    badge_x,
+                    badge_y,
+                    badge_w,
+                    badge_h,
+                    self.us(18, 10),
+                    fill='#c62828',
+                    outline='',
+                    outline_width=0
+                )
+                self.canvas.create_text(
+                    badge_x + (badge_w / 2),
+                    badge_y + (badge_h / 2),
+                    text='Next',
+                    font=('Arial', self.fs(20, 11), 'bold'),
+                    fill='white'
+                )
+
+            if key == current_prayer and not has_change_overlay:
+                current_badge_w = self.us(110, 62)
+                current_badge_h = self.us(34, 20)
+                current_badge_x = (left_panel_x + left_panel_w) - (current_badge_w / 2)
+                current_badge_y = y - (current_badge_h / 2)
+                self.draw_rounded_rectangle(
+                    current_badge_x,
+                    current_badge_y,
+                    current_badge_w,
+                    current_badge_h,
+                    self.us(18, 10),
+                    fill='#f4d03f',
+                    outline='',
+                    outline_width=0
+                )
+                self.canvas.create_text(
+                    current_badge_x + (current_badge_w / 2),
+                    current_badge_y + (current_badge_h / 2),
+                    text='Current',
+                    font=('Arial', self.fs(20, 11), 'bold'),
+                    fill='black'
+                )
+
+            self.prayer_box_shape_ids[key] = shape_id
+            self.prayer_box_bounds[key] = (left_panel_x, y, left_panel_w, row_h)
+            self.prayer_box_fill_ids[key] = fill_id
+            self.prayer_box_fill_styles[key] = {
+                'x': left_panel_x + self.us(2, 1),
+                'y': y + self.us(2, 1),
+                'width': left_panel_w - self.us(4, 2),
+                'height': row_h - self.us(4, 2),
+                'radius': max(0, corner_radius - self.us(2, 1))
+            }
+
+            athan_time = prayers_data.get(f'{key}Athan', '--')
+            iqamah_time = prayers_data.get(f'{key}Iqama', '--')
+            if key == 'Shrouq':
+                athan_time, _ = self.resolve_sunrise_time(prayers_data)
+                if athan_time != '--' and 'AM' not in athan_time and 'PM' not in athan_time:
+                    athan_time = athan_time + ' AM'
+                shrouq_plus = int(self.config.get('shrouqplus', 10))
+                iqamah_time = f'+{shrouq_plus} MIN'
+            if key == 'Fajr':
+                if athan_time != '--' and 'AM' not in athan_time and 'PM' not in athan_time:
+                    athan_time = athan_time + ' AM'
+                if iqamah_time != '--' and 'AM' not in iqamah_time and 'PM' not in iqamah_time:
+                    iqamah_time = iqamah_time + ' AM'
+            if key == 'Jummah':
+                jummah_time_text = '1:30 PM'
+                if self.jummah_time:
+                    jummah_time_text = self.jummah_time.strftime('%I:%M %p').lstrip('0')
+                athan_time = jummah_time_text
+                iqamah_time = 'All Year Long'
+
+            center_y = y + (row_h / 2)
+
+            name_left_x = left_panel_x + self.us(20, 12)
+
+            if has_change_overlay:
+                notice_x = left_panel_x + self.us(2, 1)
+                notice_y = y + self.us(2, 1)
+                notice_w = left_panel_w - self.us(4, 2)
+                notice_h = row_h - self.us(4, 2)
+                self.draw_alpha_fill(
+                    notice_x,
+                    notice_y,
+                    notice_w,
+                    notice_h,
+                    fill_color='white',
+                    opacity_percent=97,
+                    radius=max(0, corner_radius - self.us(2, 1)),
+                    outline_color='#d32f2f',
+                    outline_width=self.us(3, 2)
+                )
+
+                overlay_center_x = left_panel_x + (left_panel_w / 2)
+                overlay_center_y = y + (row_h / 2)
+                show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+                if show_arabic_name:
+                    prefix_text = f"\u202B{arabic} الإقامة تتغير إلى "
+                    suffix_text = ' غداً\u202C'
+                else:
+                    prefix_text = f'{display_name} Iqamah changes to '
+                    suffix_text = ' Tomorrow'
+                new_time_text = tomorrow_iqamah_overlay
+                overlay_font = ('Arial', self.fs(30, 16), 'bold')
+                overlay_font_obj = tkfont.Font(font=overlay_font)
+                prefix_w = overlay_font_obj.measure(prefix_text)
+                new_time_w = overlay_font_obj.measure(new_time_text)
+                suffix_w = overlay_font_obj.measure(suffix_text)
+                total_w = prefix_w + new_time_w + suffix_w
+
+                if show_arabic_name:
+                    right_x = overlay_center_x + (total_w / 2)
+                    self.canvas.create_text(
+                        right_x,
+                        overlay_center_y,
+                        text=prefix_text,
+                        font=overlay_font,
+                        fill='black',
+                        anchor='e'
+                    )
+                    self.canvas.create_text(
+                        right_x - prefix_w,
+                        overlay_center_y,
+                        text=new_time_text,
+                        font=overlay_font,
+                        fill='#c62828',
+                        anchor='e'
+                    )
+                    self.canvas.create_text(
+                        right_x - prefix_w - new_time_w,
+                        overlay_center_y,
+                        text=suffix_text,
+                        font=overlay_font,
+                        fill='#2e7d32',
+                        anchor='e'
+                    )
+                else:
+                    start_x = overlay_center_x - (total_w / 2)
+                    self.canvas.create_text(
+                        start_x,
+                        overlay_center_y,
+                        text=prefix_text,
+                        font=overlay_font,
+                        fill='black',
+                        anchor='w'
+                    )
+                    self.canvas.create_text(
+                        start_x + prefix_w,
+                        overlay_center_y,
+                        text=new_time_text,
+                        font=overlay_font,
+                        fill='#c62828',
+                        anchor='w'
+                    )
+                    self.canvas.create_text(
+                        start_x + prefix_w + new_time_w,
+                        overlay_center_y,
+                        text=suffix_text,
+                        font=overlay_font,
+                        fill='#2e7d32',
+                        anchor='w'
+                    )
+            else:
+                name_font_size = row_name_font_size
+                athan_main_size = row_time_main_size
+                athan_suffix_size = row_time_suffix_size
+                iqamah_main_size = row_time_main_size
+                iqamah_suffix_size = row_time_suffix_size
+                if key == 'Jummah':
+                    iqamah_main_size = self.fs(28, 16)
+                    iqamah_suffix_size = self.fs(16, 10)
+
+                self.draw_salah_name_transition_text(
+                    name_left_x,
+                    center_y,
+                    display_name,
+                    arabic,
+                    ('Arial', name_font_size, 'bold'),
+                    ('Arial', name_font_size, 'bold'),
+                    palette['title_text'],
+                    fill_color,
+                    anchor='w'
+                )
+                if key == 'Jummah' and not bool(getattr(self, 'salah_names_show_arabic', False)):
+                    jummah_font = ('Arial', name_font_size, 'bold')
+                    khutbah_font = ('Arial', self.fs(16, 9), 'bold')
+                    jummah_width = tkfont.Font(font=jummah_font).measure('Jummah')
+                    self.canvas.create_text(
+                        name_left_x + jummah_width + self.us(14, 8),
+                        center_y + self.us(1, 1),
+                        text='Khutbah',
+                        font=khutbah_font,
+                        fill=palette['title_text'],
+                        anchor='w'
+                    )
+                self.draw_time_text_with_meridiem(
+                    left_panel_x + (left_panel_w * 0.41),
+                    center_y,
+                    athan_time,
+                    main_size=athan_main_size,
+                    suffix_size=athan_suffix_size,
+                    color=palette['athan_text'],
+                    anchor='w'
+                )
+                self.draw_time_text_with_meridiem(
+                    col3_x,
+                    center_y,
+                    iqamah_time,
+                    main_size=iqamah_main_size,
+                    suffix_size=iqamah_suffix_size,
+                    color=palette['iqamah_text']
+                )
+
+        self.next_prayer_athan_time = next_athan
+
+        right_area_x1 = left_panel_x + left_panel_w + self.us(26, 16)
+        right_area_w = max(self.us(320, 200), width - right_area_x1 - self.us(34, 18))
+        right_center_x = right_area_x1 + (right_area_w / 2)
+
+        self.next_prayer_max_panel_width = max(self.us(320, 200), right_area_w - self.us(20, 10))
+        self.jummah_box_y = self.us(360, 240)
+        self.jummah_box_h = self.us(250, 150)
+        self.draw_current_time_display(right_center_x, self.us(170, 110), next_prayer_name)
+
+        has_upcoming_changes = False
+        eid_event = self.get_active_eid_salah_event()
+        if eid_event:
+            has_upcoming_changes = True
+        if self.upcoming_changes:
+            for prayer_key, info in self.upcoming_changes.items():
+                days_until = info.get('days_until', 0)
+                if 0 <= days_until <= 2:
+                    has_upcoming_changes = True
+                    break
+
+        if (not has_upcoming_changes) and self.dst_change_info:
+            dst_days_until = self.dst_change_info.get('days_until', 99)
+            if 0 <= dst_days_until <= 2:
+                has_upcoming_changes = True
+
+        announcement_ribbon_height = self.us(86, 52)
+        yellow_ribbon_height = self.us(70, 40)
+        ribbon_gap = self.us(5, 3)
+        announcement_ribbon_y = height - self.us(128, 80)
+
+        if has_upcoming_changes:
+            yellow_ribbon_y = announcement_ribbon_y - yellow_ribbon_height - ribbon_gap
+            self.draw_upcoming_changes_ribbon(0, yellow_ribbon_y, width, yellow_ribbon_height)
+
+        if self.announcements:
+            self.draw_announcement_ribbon(0, announcement_ribbon_y, width, announcement_ribbon_height)
+
+    def draw_salah_name_transition_text(self, x, y, english_text, arabic_text, english_font, arabic_font, fill_color, background_color, anchor='center', record_spec=True):
         """Draw a short slide/fade transition between English and Arabic salah names."""
+        created_ids = []
+
+        if record_spec:
+            self.salah_name_specs.append({
+                'x': x,
+                'y': y,
+                'english_text': english_text,
+                'arabic_text': arabic_text,
+                'english_font': english_font,
+                'arabic_font': arabic_font,
+                'fill_color': fill_color,
+                'background_color': background_color,
+                'anchor': anchor
+            })
+
+        def _draw_text(tx, ty, text, font, fill, anc):
+            item_id = self.canvas.create_text(
+                tx,
+                ty,
+                text=text,
+                font=font,
+                fill=fill,
+                anchor=anc,
+                tags=('salah_name_dynamic',)
+            )
+            created_ids.append(item_id)
+            return item_id
+
+        # Elegant modes use a softer crossfade (no travel/blink flash).
+        theme_name = self.get_theme_name()
+        if theme_name in ('elegent', 'elegent_v2'):
+            transition_active, source_show_arabic, target_show_arabic, eased = self.get_salah_name_transition_state()
+            show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+            has_arabic_text = bool(arabic_text and str(arabic_text).strip())
+            if not has_arabic_text:
+                _draw_text(x, y, english_text, english_font, fill_color, anchor)
+                if record_spec:
+                    self.salah_name_canvas_ids.extend(created_ids)
+                return created_ids
+
+            if not transition_active:
+                name_text = arabic_text if show_arabic_name else english_text
+                name_font = arabic_font if show_arabic_name else english_font
+                _draw_text(x, y, name_text, name_font, fill_color, anchor)
+                if record_spec:
+                    self.salah_name_canvas_ids.extend(created_ids)
+                return created_ids
+
+            outgoing_text = arabic_text if source_show_arabic else english_text
+            outgoing_font = arabic_font if source_show_arabic else english_font
+            incoming_text = arabic_text if target_show_arabic else english_text
+            incoming_font = arabic_font if target_show_arabic else english_font
+
+            # Fade via a darker shade only (no white/light flash during transition).
+            dark_fade_color = self._mix_hex_color(fill_color, '#000000', 0.45)
+            # Two-phase fade avoids overlapping both languages at once.
+            if eased < 0.5:
+                phase_t = eased / 0.5
+                phase_fill = self._mix_hex_color(fill_color, dark_fade_color, phase_t)
+                _draw_text(x, y, outgoing_text, outgoing_font, phase_fill, anchor)
+            else:
+                phase_t = (eased - 0.5) / 0.5
+                phase_fill = self._mix_hex_color(dark_fade_color, fill_color, phase_t)
+                _draw_text(x, y, incoming_text, incoming_font, phase_fill, anchor)
+            if record_spec:
+                self.salah_name_canvas_ids.extend(created_ids)
+            return created_ids
+
         transition_active, source_show_arabic, target_show_arabic, eased = self.get_salah_name_transition_state()
         show_arabic_name = target_show_arabic if transition_active else bool(getattr(self, 'salah_names_show_arabic', False))
         has_arabic_text = bool(arabic_text and str(arabic_text).strip())
 
         if not has_arabic_text:
-            self.canvas.create_text(x, y, text=english_text, font=english_font, fill=fill_color, anchor=anchor)
-            return
+            _draw_text(x, y, english_text, english_font, fill_color, anchor)
+            if record_spec:
+                self.salah_name_canvas_ids.extend(created_ids)
+            return created_ids
 
         if not transition_active:
             name_text = arabic_text if show_arabic_name else english_text
             name_font = arabic_font if show_arabic_name else english_font
-            self.canvas.create_text(x, y, text=name_text, font=name_font, fill=fill_color, anchor=anchor)
-            return
+            _draw_text(x, y, name_text, name_font, fill_color, anchor)
+            if record_spec:
+                self.salah_name_canvas_ids.extend(created_ids)
+            return created_ids
 
         outgoing_text = arabic_text if source_show_arabic else english_text
         outgoing_font = arabic_font if source_show_arabic else english_font
@@ -5415,8 +6048,10 @@ class IslamicBackground:
         incoming_font = arabic_font if target_show_arabic else english_font
 
         if outgoing_text == incoming_text and outgoing_font == incoming_font:
-            self.canvas.create_text(x, y, text=incoming_text, font=incoming_font, fill=fill_color, anchor=anchor)
-            return
+            _draw_text(x, y, incoming_text, incoming_font, fill_color, anchor)
+            if record_spec:
+                self.salah_name_canvas_ids.extend(created_ids)
+            return created_ids
 
         travel = self.us(26, 12)
         outgoing_y = y - (travel * eased)
@@ -5424,8 +6059,45 @@ class IslamicBackground:
         outgoing_fill = self._mix_hex_color(fill_color, background_color, min(1.0, eased * 0.9))
         incoming_fill = self._mix_hex_color(background_color, fill_color, eased)
 
-        self.canvas.create_text(x, outgoing_y, text=outgoing_text, font=outgoing_font, fill=outgoing_fill, anchor=anchor)
-        self.canvas.create_text(x, incoming_y, text=incoming_text, font=incoming_font, fill=incoming_fill, anchor=anchor)
+        _draw_text(x, outgoing_y, outgoing_text, outgoing_font, outgoing_fill, anchor)
+        _draw_text(x, incoming_y, incoming_text, incoming_font, incoming_fill, anchor)
+        if record_spec:
+            self.salah_name_canvas_ids.extend(created_ids)
+        return created_ids
+
+    def _redraw_salah_name_texts_only(self):
+        """Redraw only prayer-name text items to avoid flickering full box redraws."""
+        specs = list(getattr(self, 'salah_name_specs', []))
+        if not specs:
+            return False
+
+        try:
+            self.canvas.delete('salah_name_dynamic')
+        except:
+            pass
+
+        for item_id in getattr(self, 'salah_name_canvas_ids', []):
+            try:
+                self.canvas.delete(item_id)
+            except:
+                pass
+        self.salah_name_canvas_ids = []
+
+        for spec in specs:
+            self.draw_salah_name_transition_text(
+                spec['x'],
+                spec['y'],
+                spec['english_text'],
+                spec['arabic_text'],
+                spec['english_font'],
+                spec['arabic_font'],
+                spec['fill_color'],
+                spec['background_color'],
+                anchor=spec.get('anchor', 'center'),
+                record_spec=False
+            )
+
+        return True
 
     def get_salah_name_transition_state(self):
         """Return (active, source_show_arabic, target_show_arabic, eased_progress)."""
@@ -5637,6 +6309,8 @@ class IslamicBackground:
     def update_prayer_box_highlight_states(self, current_prayer, blinking_prayer=None, blink_visible=True):
         """Update only prayer box highlight styles without full-canvas redraw."""
         palette = self.get_theme_palette()
+        theme_name = self.get_theme_name()
+        no_outline_mode = (theme_name == 'elegent_v2')
         for prayer_key, shape_id in self.prayer_box_shape_ids.items():
             try:
                 if prayer_key == blinking_prayer:
@@ -5644,13 +6318,18 @@ class IslamicBackground:
                     self.update_prayer_box_alpha_fill(
                         prayer_key,
                         palette['card_current_fill'],
-                        palette['card_current_outline'],
-                        4
+                        '' if no_outline_mode else palette['card_current_outline'],
+                        0 if no_outline_mode else 4
                     )
                 elif prayer_key == current_prayer:
                     pass  # Glow animation handles current prayer
                 else:
-                    self.update_prayer_box_alpha_fill(prayer_key, palette['card_fill'], palette['card_outline'], 3)
+                    self.update_prayer_box_alpha_fill(
+                        prayer_key,
+                        palette['card_fill'],
+                        '' if no_outline_mode else palette['card_outline'],
+                        0 if no_outline_mode else 3
+                    )
             except:
                 pass
     
@@ -5980,7 +6659,7 @@ class IslamicBackground:
             title_text = 'الشروق'
             title_font = ('Arial', self.fs(42, 21), 'bold')
         else:
-            title_text = 'SHROUQ'
+            title_text = 'Shrouq'
             title_font = ('Arial', self.fs(42, 21), 'bold')
         self.canvas.create_text(
             x + width/2, y + self.us(42, 20),
@@ -6012,9 +6691,10 @@ class IslamicBackground:
     def draw_time_text_with_meridiem(self, x, y, time_text, main_size=36, suffix_size=20, color='#1a3a5f', **kwargs):
         """Draw time with bigger numeric part and smaller AM/PM suffix"""
         normalized_text = (time_text or '--').strip()
+        anchor = kwargs.pop('anchor', 'center')
         parts = normalized_text.rsplit(' ', 1)
 
-        if len(parts) == 2 and parts[1].upper() in ('AM', 'PM'):
+        if len(parts) == 2 and parts[1].upper() in ('AM', 'PM', 'MIN'):
             main_text = parts[0]
             suffix_text = f" {parts[1].upper()}"
 
@@ -6024,7 +6704,12 @@ class IslamicBackground:
             main_width = tkfont.Font(font=main_font).measure(main_text)
             suffix_width = tkfont.Font(font=suffix_font).measure(suffix_text)
             total_width = main_width + suffix_width
-            left_x = x - (total_width / 2)
+            if anchor == 'w':
+                left_x = x
+            elif anchor == 'e':
+                left_x = x - total_width
+            else:
+                left_x = x - (total_width / 2)
 
             self.canvas.create_text(
                 left_x, y,
@@ -6048,6 +6733,7 @@ class IslamicBackground:
                 text=normalized_text,
                 font=('Arial', main_size, 'bold'),
                 fill=color,
+                anchor=anchor,
                 **kwargs
             )
     
@@ -6282,15 +6968,16 @@ class IslamicBackground:
 
         date_font = ('Arial', self.fs(42, 24), 'bold') if show_arabic_name else ('Arial', self.fs(36, 20), 'bold')
 
-        self.draw_outlined_text(
-            x, date_block_y,
-            text=f"{day_text} | {hijri_text} | {miladi_text}",
-            font=date_font,
-            fill='white',
-            outline='black',
-            outline_px=self.us(3, 2),
-            anchor='n'
-        )
+        if self.get_theme_name() != 'elegent_v2':
+            self.draw_outlined_text(
+                x, date_block_y,
+                text=f"{day_text} | {hijri_text} | {miladi_text}",
+                font=date_font,
+                fill='white',
+                outline='black',
+                outline_px=self.us(3, 2),
+                anchor='n'
+            )
 
     def draw_build_info(self, width, height):
         """Draw app build date/time in the bottom-right corner."""
@@ -6313,6 +7000,14 @@ class IslamicBackground:
         target_show_arabic = bool(target_show_arabic)
         current_show_arabic = bool(getattr(self, 'salah_names_show_arabic', False))
 
+        # Elegant themes should transition more slowly and smoothly.
+        if self.get_theme_name() in ('elegent', 'elegent_v2'):
+            self.salah_name_transition_duration_ms = 950
+            self.salah_name_transition_tick_ms = 55
+        else:
+            self.salah_name_transition_duration_ms = 280
+            self.salah_name_transition_tick_ms = 45
+
         if not self.salah_name_transition_active and target_show_arabic == current_show_arabic:
             self._last_salah_name_arabic_state = target_show_arabic
             return
@@ -6329,7 +7024,10 @@ class IslamicBackground:
         self.salah_name_transition_active = True
         self.salah_name_transition_progress = 0.0
         if not self.iqamah_overlay_visible:
-            self.redraw_full_display()
+            if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
+                pass
+            else:
+                self.redraw_full_display()
         self.salah_name_transition_after_id = self.root.after(
             self.salah_name_transition_tick_ms,
             self._tick_salah_name_transition
@@ -6341,7 +7039,10 @@ class IslamicBackground:
         self.salah_name_transition_progress = min(1.0, self.salah_name_transition_progress + step)
 
         if not self.iqamah_overlay_visible:
-            self.redraw_full_display()
+            if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
+                pass
+            else:
+                self.redraw_full_display()
 
         if self.salah_name_transition_progress >= 1.0:
             self._finish_salah_name_transition()
@@ -6361,7 +7062,10 @@ class IslamicBackground:
         self._last_salah_name_arabic_state = self.salah_names_show_arabic
 
         if not self.iqamah_overlay_visible:
-            self.redraw_full_display()
+            if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
+                pass
+            else:
+                self.redraw_full_display()
 
     def update_salah_name_rotation_state(self):
         """Show Arabic prayer names briefly on a configurable cadence, otherwise default to English."""
@@ -6412,7 +7116,7 @@ class IslamicBackground:
             pass
     
     def schedule_ribbon_cycle(self):
-        """Schedule ribbon visibility cycle (15s ON, 15s OFF)"""
+        """Schedule ribbon visibility cycle using configured ON/OFF seconds."""
         self.update_ribbon_cycle()
 
     def _clear_ribbon_transition_artifacts(self):
@@ -6565,7 +7269,7 @@ class IslamicBackground:
         self._tick_ribbon_transition()
     
     def update_ribbon_cycle(self):
-        """Update prayer-change ribbon visibility (15s ON, 15s OFF) without redraw."""
+        """Update prayer-change ribbon visibility using configured ON/OFF seconds."""
         try:
             if self.iqamah_overlay_visible:
                 # Keep ribbon hidden while overlay is visible.
@@ -6578,8 +7282,11 @@ class IslamicBackground:
                     pass
             else:
                 prev_visible = self.ribbon_visible
-                self.ribbon_cycle_counter = (self.ribbon_cycle_counter + 1) % 30
-                self.ribbon_visible = (self.ribbon_cycle_counter < 15)
+                show_seconds = max(1, int(getattr(self, 'red_ribbon_show_seconds', self.config.get('redribbonshow', 15))))
+                hide_seconds = max(1, int(getattr(self, 'red_ribbon_hide_seconds', self.config.get('redribbonhide', 45))))
+                cycle_total = max(2, show_seconds + hide_seconds)
+                self.ribbon_cycle_counter = (self.ribbon_cycle_counter + 1) % cycle_total
+                self.ribbon_visible = (self.ribbon_cycle_counter < show_seconds)
                 if self.ribbon_visible != prev_visible:
                     self._start_ribbon_transition(self.ribbon_visible)
                 elif not self._ribbon_transition_running:
@@ -6739,7 +7446,7 @@ class IslamicBackground:
                     )
                     current_wm_x += watermark_step
 
-        if (not eid_event) and self.upcoming_changes:
+        if self.upcoming_changes:
             for prayer_key, info in self.upcoming_changes.items():
                 days_until = info.get('days_until', 0)
                 # Yellow ribbon: show changes within 2 days (including day of change)
@@ -6764,7 +7471,7 @@ class IslamicBackground:
                         'suffix': f" on {change_date_str}"
                     })
 
-        if (not eid_event) and self.dst_change_info:
+        if self.dst_change_info:
             dst_days_until = self.dst_change_info.get('days_until', 99)
             if 0 <= dst_days_until <= 2:
                 change_date = self.dst_change_info.get('change_date')
