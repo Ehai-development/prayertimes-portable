@@ -15,7 +15,7 @@ import socket
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
-from PIL import Image, ImageTk, ImageDraw
+from PIL import Image, ImageTk, ImageDraw, ImageOps
 import urllib.request
 import urllib.parse
 import threading
@@ -2967,13 +2967,25 @@ class IslamicBackground:
             exe_base = Path(sys.executable).resolve().parent
             candidates.extend([
                 exe_base.parent / 'images' / 'Athan' / 'Muathin.png',
+                exe_base.parent / 'images' / 'athan' / 'muathin.png',
                 exe_base / 'images' / 'Athan' / 'Muathin.png',
+                exe_base / 'images' / 'athan' / 'muathin.png',
             ])
+
+            meipass_dir = getattr(sys, '_MEIPASS', None)
+            if meipass_dir:
+                meipass_path = Path(meipass_dir)
+                candidates.extend([
+                    meipass_path / 'images' / 'Athan' / 'Muathin.png',
+                    meipass_path / 'images' / 'athan' / 'muathin.png',
+                ])
 
         app_base = Path(__file__).resolve().parent
         candidates.extend([
             Path.cwd() / 'images' / 'Athan' / 'Muathin.png',
+            Path.cwd() / 'images' / 'athan' / 'muathin.png',
             app_base / 'images' / 'Athan' / 'Muathin.png',
+            app_base / 'images' / 'athan' / 'muathin.png',
         ])
 
         for candidate in candidates:
@@ -3071,7 +3083,7 @@ class IslamicBackground:
         return None
 
     def _draw_athan_shine_frame(self, cycle_pos):
-        """Draw full-screen athan overlay with Muathin background and countdowns."""
+        """Draw a blinking right-side athan alert box over the info panels."""
         prayer = self.athan_callout_prayer
         if not prayer:
             return
@@ -3079,34 +3091,8 @@ class IslamicBackground:
         width = max(1, self.canvas.winfo_width())
         height = max(1, self.canvas.winfo_height())
 
-        athan_img_path = self._get_athan_overlay_image_path()
-        if athan_img_path is not None:
-            athan_img_path_str = str(athan_img_path)
-            if self._athan_overlay_image_path != athan_img_path_str:
-                try:
-                    self._athan_overlay_base_image = Image.open(athan_img_path_str).convert('RGB')
-                    self._athan_overlay_image_path = athan_img_path_str
-                    self._athan_overlay_image_size = (0, 0)
-                    self._athan_overlay_photo = None
-                except Exception as e:
-                    self._log(f"Warning: unable to load athan overlay image '{athan_img_path_str}': {e}")
-                    self._athan_overlay_base_image = None
-                    self._athan_overlay_photo = None
-                    self._athan_overlay_image_size = (0, 0)
-                    self._athan_overlay_image_path = None
-
-        if self._athan_overlay_base_image is not None:
-            if self._athan_overlay_image_size != (width, height) or self._athan_overlay_photo is None:
-                try:
-                    if hasattr(Image, 'Resampling'):
-                        resized = self._athan_overlay_base_image.resize((width, height), Image.Resampling.LANCZOS)
-                    else:
-                        resized = self._athan_overlay_base_image.resize((width, height), Image.LANCZOS)
-                    self._athan_overlay_photo = ImageTk.PhotoImage(resized)
-                    self._athan_overlay_image_size = (width, height)
-                except Exception as e:
-                    self._log(f"Warning: unable to resize athan overlay image '{self._athan_overlay_image_path}': {e}")
-                    self._athan_overlay_photo = None
+        # Keep athan alert continuously visible for the full configured duration.
+        blink_visible = True
 
         prayer_name_map = {
             'fajr': 'Fajr',
@@ -3118,15 +3104,40 @@ class IslamicBackground:
             'isha': 'Isha',
         }
         prayer_display = prayer_name_map.get(str(prayer).strip().lower(), str(prayer).strip().title())
-        center_text = f"{prayer_display} Athan Now"
+        center_text = f"{prayer_display.upper()} ATHAN NOW"
 
-        time_font = ('Arial', self.fs(52, 24), 'bold')
-        right_font = ('Arial', self.fs(44, 21), 'bold')
+        title_font = ('Arial', self.fs(52, 28), 'bold')
+        time_font = ('Arial', self.fs(90, 44), 'bold')
+        right_font = ('Arial', self.fs(38, 20), 'bold')
         current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
         iqamah_countdown_text = self._get_prayer_iqamah_countdown(prayer_display)
-        right_line_text = f"{prayer_display} Iqamah in : {iqamah_countdown_text}"
+        right_line_text = f"{prayer_display.upper()} iqamah in {iqamah_countdown_text}"
 
-        signature = (prayer_display, width, height, str(athan_img_path) if athan_img_path else '')
+        theme_name = self.get_theme_name()
+        if theme_name == 'elegent_v2':
+            left_panel_x = self.us(36, 18)
+            left_panel_y = self.us(236, 150)
+            left_panel_w = min(self.us(880, 550), max(self.us(590, 360), width * 0.50))
+            right_area_x1 = left_panel_x + left_panel_w + self.us(26, 16)
+            right_area_w = max(self.us(320, 200), width - right_area_x1 - self.us(34, 18))
+            current_time_y = self.jummah_box_y + self.us(14, 8)
+            weather_y_offset = -self.us(10, 6)
+            weather_y = self.jummah_box_y + self.jummah_box_h + self.us(12, 8) + weather_y_offset
+            weather_bottom = weather_y + self.us(86, 46)
+
+            box_x = right_area_x1
+            box_y = left_panel_y
+            box_w = right_area_w
+            box_h = max((height - box_y) - self.us(10, 6), self.us(480, 300))
+        else:
+            box_w = min(self.us(620, 360), width * 0.38)
+            box_h = min(self.us(520, 300), height * 0.48)
+            box_x = width - box_w - self.us(24, 12)
+            box_y = self.us(70, 40)
+
+        radius = self.us(40, 22)
+        athan_img_path = self._get_athan_overlay_image_path()
+        signature = (prayer_display, int(box_x), int(box_y), int(box_w), int(box_h), str(athan_img_path) if athan_img_path else '', 'athan_v5_static_centered_time')
         needs_rebuild = (self._athan_overlay_signature != signature)
         if not needs_rebuild:
             try:
@@ -3150,90 +3161,124 @@ class IslamicBackground:
                         pass
                     setattr(self, attr, None)
 
+            if athan_img_path is not None:
+                athan_img_path_str = str(athan_img_path)
+                if self._athan_overlay_image_path != athan_img_path_str:
+                    try:
+                        self._athan_overlay_base_image = Image.open(athan_img_path_str).convert('RGBA')
+                        self._athan_overlay_image_path = athan_img_path_str
+                        self._athan_overlay_image_size = (0, 0)
+                        self._athan_overlay_photo = None
+                    except Exception as e:
+                        self._log(f"Warning: unable to load athan overlay image '{athan_img_path_str}': {e}")
+                        self._athan_overlay_base_image = None
+                        self._athan_overlay_photo = None
+                        self._athan_overlay_image_size = (0, 0)
+                        self._athan_overlay_image_path = None
+
+            image_size = (max(1, int(box_w)), max(1, int(box_h)))
+            if self._athan_overlay_base_image is not None and (self._athan_overlay_image_size != image_size or self._athan_overlay_photo is None):
+                try:
+                    inset = max(2, int(self.us(8, 4)))
+                    inner_w = max(1, image_size[0] - (inset * 2))
+                    inner_h = max(1, image_size[1] - (inset * 2))
+                    if hasattr(Image, 'Resampling'):
+                        fitted = ImageOps.fit(self._athan_overlay_base_image, (inner_w, inner_h), Image.Resampling.LANCZOS, centering=(0.5, 0.30))
+                    else:
+                        fitted = ImageOps.fit(self._athan_overlay_base_image, (inner_w, inner_h), Image.LANCZOS, centering=(0.5, 0.30))
+
+                    panel_bg = Image.new('RGBA', image_size, (0, 0, 0, 0))
+                    panel_bg.paste(fitted, (inset, inset))
+
+                    clip_radius = max(1, int(radius) - inset)
+                    mask = Image.new('L', (inner_w, inner_h), 0)
+                    ImageDraw.Draw(mask).rounded_rectangle([(0, 0), (inner_w - 1, inner_h - 1)], radius=clip_radius, fill=255)
+                    alpha = panel_bg.split()[3]
+                    alpha.paste(mask, (inset, inset))
+                    panel_bg.putalpha(alpha)
+
+                    self._athan_overlay_photo = ImageTk.PhotoImage(panel_bg)
+                    self._athan_overlay_image_size = image_size
+                except Exception as e:
+                    self._log(f"Warning: unable to build athan panel image '{self._athan_overlay_image_path}': {e}")
+                    self._athan_overlay_photo = None
+
             if self._athan_overlay_photo is not None:
-                bg_id = self.canvas.create_image(0, 0, image=self._athan_overlay_photo, anchor='nw')
+                bg_id = self.canvas.create_image(box_x, box_y, image=self._athan_overlay_photo, anchor='nw')
             else:
-                bg_id = self.canvas.create_rectangle(-2, -2, width + 2, height + 2, fill='#1b1b1b', outline='')
+                bg_id = self.draw_rounded_rectangle(
+                    box_x,
+                    box_y,
+                    box_w,
+                    box_h,
+                    radius,
+                    fill='#13233d',
+                    outline='',
+                    outline_width=0
+                )
             self._athan_extra_ids.append(bg_id)
 
-            center_font = ('Arial', self.fs(84, 40), 'bold')
-            center_font_obj = tkfont.Font(font=center_font)
-            center_w = center_font_obj.measure(center_text)
-            center_h = center_font_obj.metrics('linespace')
-            center_pad_x = self.us(32, 16)
-            center_pad_y = self.us(18, 9)
-            center_box_w = center_w + (center_pad_x * 2)
-            center_box_h = center_h + (center_pad_y * 2)
-            center_box_x = (width - center_box_w) / 2
-            center_box_y = height - self.us(210, 112) - center_box_h
-            center_box_id = self.draw_rounded_rectangle(
-                center_box_x, center_box_y,
-                center_box_w, center_box_h,
-                self.us(24, 12),
-                fill='white', outline='#e0e0e0', outline_width=2
+            box_id = self.draw_alpha_fill(
+                box_x,
+                box_y,
+                box_w,
+                box_h,
+                fill_color='#13233d',
+                opacity_percent=0,
+                radius=radius,
+                outline_color='#efe2b4',
+                outline_width=self.us(5, 3)
             )
+            self._athan_extra_ids.append(box_id)
+            self.athan_callout_box_id = box_id
+
+            title_y = box_y + self.us(72, 38)
             center_id = self.canvas.create_text(
-                center_box_x + center_pad_x,
-                center_box_y + center_pad_y,
+                box_x + (box_w / 2),
+                title_y,
                 text=center_text,
-                font=center_font,
-                fill='#d4af37',
-                anchor='nw'
+                font=title_font,
+                fill='#0b1f4d',
+                anchor='center'
             )
-            self._athan_extra_ids.extend([center_box_id, center_id])
+            self._athan_extra_ids.append(center_id)
             self.athan_callout_text_id = center_id
 
-            time_font_obj = tkfont.Font(font=time_font)
-            time_w = time_font_obj.measure(current_time_text)
-            time_h = time_font_obj.metrics('linespace')
-            time_pad_x = self.us(22, 10)
-            time_pad_y = self.us(12, 6)
-            left_margin = self.us(24, 12)
-            bottom_margin = self.us(22, 10)
-            time_box_w = time_w + (time_pad_x * 2)
-            time_box_h = time_h + (time_pad_y * 2)
-            time_box_x = left_margin
-            time_box_y = height - bottom_margin - time_box_h
-            time_box_id = self.draw_rounded_rectangle(
-                time_box_x, time_box_y,
-                time_box_w, time_box_h,
-                self.us(22, 11),
-                fill='white', outline='#c6d2e3', outline_width=2
-            )
             self._athan_overlay_time_text_id = self.canvas.create_text(
-                time_box_x + time_pad_x,
-                time_box_y + time_pad_y,
+                box_x + (box_w / 2),
+                box_y + (box_h * 0.50),
                 text=current_time_text,
                 font=time_font,
-                fill='#1a3a5f',
-                anchor='nw'
+                fill='#0b1f4d',
+                anchor='center'
             )
-            self._athan_extra_ids.extend([time_box_id, self._athan_overlay_time_text_id])
+            self._athan_extra_ids.append(self._athan_overlay_time_text_id)
 
-            right_font_obj = tkfont.Font(font=right_font)
-            right_w = right_font_obj.measure(right_line_text)
-            right_h = right_font_obj.metrics('linespace')
-            right_pad_x = self.us(20, 10)
-            right_pad_y = self.us(10, 5)
-            right_box_w = right_w + (right_pad_x * 2)
-            right_box_h = right_h + (right_pad_y * 2)
-            right_box_x = width - left_margin - right_box_w
-            right_box_y = height - bottom_margin - right_box_h
-            right_box_id = self.draw_rounded_rectangle(
-                right_box_x, right_box_y,
-                right_box_w, right_box_h,
-                self.us(22, 11),
-                fill='white', outline='#c6d2e3', outline_width=2
+            strip_margin_x = self.us(28, 16)
+            strip_h = self.us(108, 60)
+            strip_y = box_y + box_h - strip_h - self.us(24, 12)
+            strip_id = self.draw_alpha_fill(
+                box_x + strip_margin_x,
+                strip_y,
+                box_w - (strip_margin_x * 2),
+                strip_h,
+                fill_color='#f4ecd3',
+                opacity_percent=88,
+                radius=self.us(24, 12),
+                outline_color='#c8a95a',
+                outline_width=self.us(3, 2)
             )
+            self._athan_extra_ids.append(strip_id)
+
             self._athan_overlay_iqamah_text_id = self.canvas.create_text(
-                right_box_x + right_pad_x,
-                right_box_y + right_pad_y,
+                box_x + (box_w / 2),
+                strip_y + (strip_h / 2),
                 text=right_line_text,
                 font=right_font,
-                fill='#2E7D32',
-                anchor='nw'
+                fill='#0b1f4d',
+                anchor='center'
             )
-            self._athan_extra_ids.extend([right_box_id, self._athan_overlay_iqamah_text_id])
+            self._athan_extra_ids.append(self._athan_overlay_iqamah_text_id)
 
             self._athan_overlay_signature = signature
         else:
