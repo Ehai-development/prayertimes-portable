@@ -5,6 +5,7 @@ Step 1: Islamic Background Design
 
 import tkinter as tk
 from tkinter import Canvas
+from tkinter import messagebox
 from tkinter import font as tkfont
 import math
 import csv
@@ -166,6 +167,27 @@ class IslamicBackground:
         self.eid_firework_cycle_seconds = 2.2
         self.eid_balloon_cycle_seconds = 9.5
         self.eid_animation_tick_ms = 220
+        # Keep Takbeer cycle checks lightweight to avoid unnecessary redraw pressure.
+        self.arafah_takbeer_tick_ms = 1000
+        self.arafah_takbeer_particles = []
+        self.arafah_takbeer_max_particles = 18
+        self.arafah_takbeer_lines = [
+            'اللَّهُ أَكْبَرُ، اللَّهُ أَكْبَرُ',
+            'لَا إِلٰهَ إِلَّا اللَّه',
+            'اللَّهُ أَكْبَرُ، اللَّهُ أَكْبَرُ وَلِلَّهِ الْحَمْد',
+        ]
+        self.arafah_takbeer_cycle_order = ['Fajr', 'Duhr', 'Asr', 'Maghrib']
+        self.arafah_takbeer_display_seconds = 3
+        self.arafah_takbeer_pause_seconds = 15
+        self.arafah_takbeer_cycle_phase = 'show'
+        self.arafah_takbeer_cycle_index = 0
+        self.arafah_takbeer_cycle_started_mono = time.monotonic()
+        self.arafah_takbeer_cycle_after_id = None
+        self.arafah_takbeer_start_date = None
+        self.arafah_takbeer_end_date = None
+        self.show_arafah_takbeer_panel = True
+        self.show_takbeer_shower = True
+        self.takbeer_shower_tick_ms = 140
 
         # Current prayer glow animation
         self.glow_tick_ms = 80
@@ -337,6 +359,8 @@ class IslamicBackground:
             self.root.after(self.lantern_pulse_tick_ms, self.schedule_lantern_pulse_animation)
             self.root.after(self.star_twinkle_tick_ms, self.schedule_star_twinkle_animation)
             self.root.after(self.eid_animation_tick_ms, self.schedule_eid_animation)
+            self.root.after(self.arafah_takbeer_tick_ms, self.schedule_arafah_takbeer_animation)
+            self.root.after(self.takbeer_shower_tick_ms, self.schedule_takbeer_shower_animation)
             self.root.after(self.glow_tick_ms, self.schedule_glow_animation)
             if self.show_weather:
                 self.root.after(500, self._start_weather_fetch)
@@ -707,6 +731,239 @@ class IslamicBackground:
             self.canvas.tag_raise('animated_eid')
         else:
             self.canvas.delete('animated_eid')
+
+    def schedule_arafah_takbeer_animation(self):
+        """Advance the Arafah Takbeer prayer-box cycle within the configured date range."""
+        try:
+            if self.get_theme_name() != 'elegent_v2':
+                return
+            if self.iqamah_overlay_visible or self._is_full_redraw:
+                return
+            if self._advance_arafah_takbeer_cycle():
+                self.redraw_full_display()
+        except Exception as e:
+            self._log(f"ERROR in schedule_arafah_takbeer_animation: {e}")
+        finally:
+            try:
+                self.root.after(self.arafah_takbeer_tick_ms, self.schedule_arafah_takbeer_animation)
+            except:
+                pass
+
+    def _should_draw_takbeer_shower(self):
+        if self.get_theme_name() != 'elegent_v2':
+            return False
+        if not bool(getattr(self, 'show_arafah_takbeer_panel', True)):
+            return False
+        if bool(getattr(self, 'athan_callout_prayer', None)):
+            return False
+        if self.iqamah_overlay_visible:
+            return False
+        if not self.is_takbeer_shower_window(self.get_current_date()):
+            return False
+        return self._get_arafah_takbeer_active_key() is not None
+
+    def schedule_takbeer_shower_animation(self):
+        """Animate takbeer lines showering downward using the same show/pause interval cycle."""
+        try:
+            if self._is_full_redraw:
+                return
+
+            if not self._should_draw_takbeer_shower():
+                self.canvas.delete('takbeer_shower')
+                self.arafah_takbeer_particles = []
+                return
+
+            width = max(1, self.canvas.winfo_width())
+            height = max(1, self.canvas.winfo_height())
+
+            active_particles = []
+            for particle in list(getattr(self, 'arafah_takbeer_particles', [])):
+                item_id = particle.get('id')
+                if not item_id:
+                    continue
+                try:
+                    if not self.canvas.type(item_id):
+                        continue
+                except:
+                    continue
+
+                vy = float(particle.get('vy', 2.0))
+                self.canvas.move(item_id, 0, vy)
+                y_new = float(particle.get('y', 0.0)) + vy
+                particle['y'] = y_new
+                if y_new <= (height + self.us(40, 20)):
+                    active_particles.append(particle)
+                else:
+                    try:
+                        self.canvas.delete(item_id)
+                    except:
+                        pass
+
+            self.arafah_takbeer_particles = active_particles
+
+            max_particles = max(6, int(getattr(self, 'arafah_takbeer_max_particles', 18)))
+            if len(self.arafah_takbeer_particles) < max_particles and random.random() < 0.65:
+                lanes = [0.24, 0.5, 0.76]
+                lane_gap = self.us(220, 120)
+                spawn_y = -self.us(40, 22)
+
+                for lane_idx, line_text in enumerate(self.arafah_takbeer_lines):
+                    lane_x = int(width * lanes[min(lane_idx, len(lanes) - 1)])
+                    lane_busy = any(
+                        p.get('lane') == lane_idx and float(p.get('y', 0.0)) < lane_gap
+                        for p in self.arafah_takbeer_particles
+                    )
+                    if lane_busy:
+                        continue
+
+                    font_size = self.fs(random.randint(34, 44), random.randint(18, 24))
+                    text_id = self.canvas.create_text(
+                        lane_x,
+                        spawn_y,
+                        text=line_text,
+                        font=('Traditional Arabic', font_size, 'bold'),
+                        fill='#f8fbff',
+                        anchor='n',
+                        justify='center',
+                        tags=('takbeer_shower',)
+                    )
+                    self.arafah_takbeer_particles.append({
+                        'id': text_id,
+                        'lane': lane_idx,
+                        'y': float(spawn_y),
+                        'vy': random.uniform(self.us(6, 3), self.us(10, 5))
+                    })
+
+            self.canvas.tag_raise('takbeer_shower')
+        except Exception as e:
+            self._log(f"ERROR in schedule_takbeer_shower_animation: {e}")
+        finally:
+            try:
+                self.root.after(self.takbeer_shower_tick_ms, self.schedule_takbeer_shower_animation)
+            except:
+                pass
+
+    def _parse_config_date(self, value):
+        """Parse a date string from settings into a date object."""
+        text = str(value or '').strip()
+        if not text:
+            return None
+        for fmt in ('%Y-%m-%d', '%Y/%m/%d', '%m/%d/%Y', '%d/%m/%Y', '%b %d %Y', '%B %d %Y'):
+            try:
+                return datetime.strptime(text, fmt).date()
+            except:
+                continue
+        return None
+
+    def is_arafah_takbeer_window(self, date_obj):
+        """True when current date is within configured Arafah Takbeer date range."""
+        start = getattr(self, 'arafah_takbeer_start_date', None)
+        end = getattr(self, 'arafah_takbeer_end_date', None)
+        if not start or not end:
+            return False
+        if end < start:
+            return False
+        if not (start <= date_obj <= end):
+            return False
+
+        # On the configured end date, stop at today's Maghrib Athan time.
+        if date_obj == end and date_obj == self.get_current_date():
+            try:
+                prayers_data = self.get_today_prayers() or {}
+                maghrib_athan = self.parse_time(prayers_data.get('MaghribAthan', ''))
+                if maghrib_athan:
+                    return self.get_current_time() < maghrib_athan
+            except:
+                pass
+
+        return True
+
+    def is_takbeer_shower_window(self, date_obj):
+        """True for the four days after configured start date (e.g. 27-30 when start is 26)."""
+        start = getattr(self, 'arafah_takbeer_start_date', None)
+        if not start:
+            return False
+        shower_start = start + timedelta(days=1)
+        shower_end = start + timedelta(days=4)
+        return shower_start <= date_obj <= shower_end
+
+    def _is_takbeer_cycle_window(self, date_obj):
+        return self.is_arafah_takbeer_window(date_obj) or self.is_takbeer_shower_window(date_obj)
+
+    def _reset_arafah_takbeer_cycle(self):
+        self.arafah_takbeer_cycle_phase = 'show'
+        self.arafah_takbeer_cycle_index = 0
+        self.arafah_takbeer_cycle_started_mono = time.monotonic()
+
+    def _get_arafah_takbeer_active_key(self):
+        if not self._is_takbeer_cycle_window(self.get_current_date()):
+            return None
+        if self.arafah_takbeer_cycle_phase != 'show':
+            return None
+        if not self.arafah_takbeer_cycle_order:
+            return None
+        index = max(0, min(self.arafah_takbeer_cycle_index, len(self.arafah_takbeer_cycle_order) - 1))
+        return self.arafah_takbeer_cycle_order[index]
+
+    def _advance_arafah_takbeer_cycle(self):
+        if self.get_theme_name() != 'elegent_v2':
+            if self.arafah_takbeer_cycle_phase != 'off' or self.arafah_takbeer_cycle_index != 0:
+                self.arafah_takbeer_cycle_phase = 'off'
+                self.arafah_takbeer_cycle_index = 0
+                self.arafah_takbeer_cycle_started_mono = time.monotonic()
+                return True
+            return False
+
+        if not self._is_takbeer_cycle_window(self.get_current_date()):
+            if self.arafah_takbeer_cycle_phase != 'off' or self.arafah_takbeer_cycle_index != 0:
+                self.arafah_takbeer_cycle_phase = 'off'
+                self.arafah_takbeer_cycle_index = 0
+                self.arafah_takbeer_cycle_started_mono = time.monotonic()
+                return True
+            return False
+
+        now_mono = time.monotonic()
+        elapsed = now_mono - float(getattr(self, 'arafah_takbeer_cycle_started_mono', now_mono))
+        changed = False
+
+        if self.arafah_takbeer_cycle_phase == 'off':
+            self.arafah_takbeer_cycle_phase = 'show'
+            self.arafah_takbeer_cycle_index = 0
+            self.arafah_takbeer_cycle_started_mono = now_mono
+            return True
+
+        is_shower_day = self.is_takbeer_shower_window(self.get_current_date())
+        display_seconds = float(self.arafah_takbeer_display_seconds)
+        if is_shower_day:
+            # Shower mode stays on longer so falling lines can reach the bottom.
+            display_seconds = max(1.0, display_seconds * 2.0)
+
+        if is_shower_day:
+            # In shower mode, keep a full off phase after the longer show window.
+            hidden_seconds = max(1.0, float(self.arafah_takbeer_pause_seconds))
+        else:
+            hidden_seconds = max(1.0, float(self.arafah_takbeer_pause_seconds) - float(self.arafah_takbeer_display_seconds))
+
+        if self.arafah_takbeer_cycle_phase == 'show':
+            if elapsed >= display_seconds:
+                self.arafah_takbeer_cycle_phase = 'pause'
+                self.arafah_takbeer_cycle_started_mono = now_mono
+                changed = True
+        elif self.arafah_takbeer_cycle_phase == 'pause':
+            if elapsed >= hidden_seconds:
+                self.arafah_takbeer_cycle_phase = 'show'
+                if self.arafah_takbeer_cycle_order:
+                    self.arafah_takbeer_cycle_index = (self.arafah_takbeer_cycle_index + 1) % len(self.arafah_takbeer_cycle_order)
+                else:
+                    self.arafah_takbeer_cycle_index = 0
+                self.arafah_takbeer_cycle_started_mono = now_mono
+                changed = True
+
+        return changed
+
+    def draw_arafah_takbeer_rain(self, width, height, animated=True, tags='animated_takbeer_rain'):
+        """Deprecated placeholder retained for compatibility; takbeer rain was removed."""
+        return
 
     def update_lanterns_only(self):
         """Update only the lantern visuals without redrawing the entire display."""
@@ -1281,6 +1538,28 @@ class IslamicBackground:
             "Eid Adha Salah at 9:00 AM on Wednesday May 27 2027"
         )
         self.config['Eid Salah'] = str(self.config.get('Eid Salah', self.config.get('eidsalah', default_eid_salah)) or '').strip()
+        self.config['ArafahTakbeerstart'] = str(self.config.get('ArafahTakbeerstart', '') or '').strip()
+        self.config['ArafahTakbeerend'] = str(self.config.get('ArafahTakbeerend', '') or '').strip()
+        try:
+            self.arafah_takbeer_display_seconds = max(1, int(self.config.get('ArafahTakbeerDisplaySeconds', 3)))
+        except:
+            self.arafah_takbeer_display_seconds = 3
+        try:
+            # Interpreted as full cycle interval: panel appears every N seconds.
+            self.arafah_takbeer_pause_seconds = max(1, int(self.config.get('ArafahTakbeerPauseSeconds', 15)))
+        except:
+            self.arafah_takbeer_pause_seconds = 15
+        self.config['ArafahTakbeerDisplaySeconds'] = self.arafah_takbeer_display_seconds
+        self.config['ArafahTakbeerPauseSeconds'] = self.arafah_takbeer_pause_seconds
+        show_takbeer_panel_val = str(self.config.get('ArafahTakbeerPanel', 'yes')).strip().lower()
+        self.show_arafah_takbeer_panel = show_takbeer_panel_val in ('yes', 'true', '1')
+        self.config['ArafahTakbeerPanel'] = 'yes' if self.show_arafah_takbeer_panel else 'no'
+        show_takbeer_shower_val = str(self.config.get('TakbeerShower', 'yes')).strip().lower()
+        self.show_takbeer_shower = show_takbeer_shower_val in ('yes', 'true', '1')
+        self.config['TakbeerShower'] = 'yes' if self.show_takbeer_shower else 'no'
+        self.arafah_takbeer_start_date = self._parse_config_date(self.config['ArafahTakbeerstart'])
+        self.arafah_takbeer_end_date = self._parse_config_date(self.config['ArafahTakbeerend'])
+        self._reset_arafah_takbeer_cycle()
 
         # Visual theme selection
         theme_name = str(self.config.get('theme', 'moon')).strip().lower()
@@ -5701,6 +5980,7 @@ class IslamicBackground:
         self.prayer_box_bounds = {}
         self.salah_name_specs = []
         self.salah_name_canvas_ids = []
+        active_takbeer_key = self._get_arafah_takbeer_active_key()
 
         left_panel_x = self.us(36, 18)
         left_panel_y = self.us(236, 150)
@@ -6040,6 +6320,7 @@ class IslamicBackground:
         self.jummah_box_y = self.us(360, 240)
         self.jummah_box_h = self.us(250, 150)
         self.draw_current_time_display(right_center_x, self.us(170, 110), next_prayer_name)
+        self.draw_arafah_takbeer_panel(right_area_x1, right_area_w)
 
         has_upcoming_changes = False
         eid_event = self.get_active_eid_salah_event()
@@ -6068,6 +6349,10 @@ class IslamicBackground:
 
         if self.announcements:
             self.draw_announcement_ribbon(0, announcement_ribbon_y, width, announcement_ribbon_height)
+
+        # Keep Arafah hadith panel and text over all ribbons when panel is active.
+        self.canvas.tag_raise('arafah_hadith_panel')
+        self.canvas.tag_raise('arafah_hadith_text')
 
     def draw_salah_name_transition_text(self, x, y, english_text, arabic_text, english_font, arabic_font, fill_color, background_color, anchor='center', record_spec=True):
         """Draw a short slide/fade transition between English and Arabic salah names."""
@@ -7100,6 +7385,130 @@ class IslamicBackground:
                 outline_px=self.us(3, 2),
                 anchor='n'
             )
+
+    def _should_draw_arafah_takbeer_panel(self):
+        """Return True when the dedicated Takbeer panel should be visible."""
+        if self.get_theme_name() != 'elegent_v2':
+            return False
+        if not bool(getattr(self, 'show_arafah_takbeer_panel', True)):
+            return False
+        if not bool(getattr(self, 'show_takbeer_shower', True)):
+            return False
+        if bool(getattr(self, 'athan_callout_prayer', None)):
+            return False
+        if not self.is_arafah_takbeer_window(self.get_current_date()):
+            return False
+        return self._get_arafah_takbeer_active_key() is not None
+
+    def draw_arafah_takbeer_panel(self, right_area_x1, right_area_w):
+        """Draw a dedicated Takbeer panel below weather cards on elegent_v2."""
+        if not self._should_draw_arafah_takbeer_panel():
+            return
+
+        palette = self.get_theme_palette()
+        width = max(1, self.canvas.winfo_width())
+        height = max(1, self.canvas.winfo_height())
+
+        # Match the Athan callout footprint on elegent_v2.
+        panel_x = right_area_x1
+        panel_y = self.us(236, 150)
+        panel_w = right_area_w
+        panel_h = max((height - panel_y) - self.us(10, 6), self.us(480, 300))
+        panel_radius = self.us(40, 22)
+        panel_tags = ('arafah_hadith_panel',)
+        text_tags = ('arafah_hadith_text',)
+
+        self.draw_alpha_fill(
+            panel_x,
+            panel_y,
+            panel_w,
+            panel_h,
+            fill_color='#142846',
+            opacity_percent=92,
+            radius=panel_radius,
+            tags=panel_tags,
+            outline_color='',
+            outline_width=0
+        )
+
+        arabic_text = (
+            'قَالَ رَسُولُ اللَّهِ ﷺ:\n'
+            'خَيْرُ الدُّعَاءِ دُعَاءُ يَوْمِ عَرَفَةَ، وَخَيْرُ مَا قُلْتُ أَنَا وَالنَّبِيُّونَ مِنْ قَبْلِي:\n'
+            'لَا إِلَهَ إِلَّا اللَّهُ وَحْدَهُ لَا شَرِيكَ لَهُ، لَهُ الْمُلْكُ وَلَهُ الْحَمْدُ،\n'
+            'وَهُوَ عَلَى كُلِّ شَيْءٍ قَدِيرٌ'
+        )
+        english_text = (
+            'The Messenger of Allah ﷺ said:\n'
+            '"The best supplication is the supplication on the Day of Arafah.\n'
+            'And the best of what I and the prophets before me have said is:\n'
+            'There is no god but Allah, alone, without partner. To Him belongs the dominion\n'
+            'and all praise, and He is capable of all things."'
+        )
+
+        content_w = panel_w - self.us(52, 28)
+        center_x = panel_x + (panel_w / 2)
+        top_pad = self.us(30, 16)
+        bottom_pad = self.us(26, 14)
+        section_gap = self.us(22, 12)
+        text_top = panel_y + top_pad
+        text_bottom = panel_y + panel_h - bottom_pad
+        usable_h = max(self.us(220, 130), text_bottom - text_top)
+        arabic_region_h = usable_h * 0.58
+        english_y = text_top + arabic_region_h + section_gap
+
+        arabic_size = self.fs(44, 26)
+        english_size = self.fs(30, 18)
+        min_arabic_size = self.fs(28, 16)
+        min_english_size = self.fs(18, 11)
+        min_gap = self.us(8, 4)
+
+        for _ in range(8):
+            self.canvas.delete('arafah_hadith_text')
+
+            arabic_id = self.draw_outlined_text(
+                center_x,
+                text_top,
+                text=arabic_text,
+                font=('Traditional Arabic', arabic_size, 'bold'),
+                fill='#f8fbff',
+                outline='#08172e',
+                outline_px=self.us(2, 1),
+                anchor='n',
+                justify='center',
+                tags=text_tags,
+                width=content_w
+            )
+            english_id = self.draw_outlined_text(
+                center_x,
+                english_y,
+                text=english_text,
+                font=('Arial', english_size, 'bold'),
+                fill='#eaf2ff',
+                outline='#08172e',
+                outline_px=self.us(2, 1),
+                anchor='n',
+                justify='center',
+                tags=text_tags,
+                width=content_w
+            )
+
+            arabic_bbox = self.canvas.bbox(arabic_id)
+            english_bbox = self.canvas.bbox(english_id)
+            if not arabic_bbox or not english_bbox:
+                break
+
+            overlap = arabic_bbox[3] + min_gap > english_bbox[1]
+            english_overflow = english_bbox[3] > text_bottom
+            if not overlap and not english_overflow:
+                break
+
+            if overlap and arabic_size > min_arabic_size:
+                arabic_size = max(min_arabic_size, arabic_size - 2)
+            if english_overflow and english_size > min_english_size:
+                english_size = max(min_english_size, english_size - 1)
+
+        # Keep hadith text above all panel artwork.
+        self.canvas.tag_raise('arafah_hadith_text')
 
     def draw_build_info(self, width, height):
         """Draw app build date/time in the bottom-right corner."""
@@ -8441,7 +8850,20 @@ def main():
         app = IslamicBackground(root)
         root.mainloop()
     except Exception as e:
-        pass
+        try:
+            import traceback
+            error_text = traceback.format_exc()
+            with open('error_log.txt', 'a', encoding='utf-8') as f:
+                f.write(f"\n[{datetime.now().isoformat()}] Unhandled exception in main()\n")
+                f.write(error_text)
+                f.write("\n")
+            try:
+                messagebox.showerror('Prayer Times Display Error', f"{e}\n\nDetails saved to error_log.txt")
+            except:
+                pass
+            print(error_text, file=sys.stderr)
+        except:
+            pass
 
 
 if __name__ == '__main__':
