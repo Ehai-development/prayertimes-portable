@@ -33,7 +33,7 @@
   "ArafahTakbeerDisplaySeconds": 10,
   "ArafahTakbeerPauseSeconds": 20,
   "ArafahTakbeerPanel": "yes",
-  "TakbeerShower": "no",
+  "TakbeerShower": "yes",
   "redribbonshow": 15,
   "redribbonhide": 45,
   "arabicchangeevery": 30,

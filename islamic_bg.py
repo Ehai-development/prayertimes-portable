@@ -98,6 +98,10 @@ class IslamicBackground:
         # Bind resize event
         self.canvas.bind('<Configure>', self.on_resize)
 
+        # When the window is first mapped, enforce fullscreen again.
+        self._mapped_fullscreen_fix_done = False
+        self.root.bind('<Map>', self._on_window_mapped, add='+')
+
         # Startup visibility nudges (helps on multi-display/TV setups)
         self._startup_nudge_attempts = 0
         self.root.after(250, self._startup_visibility_nudge)
@@ -172,10 +176,11 @@ class IslamicBackground:
         self.arafah_takbeer_particles = []
         self.arafah_takbeer_max_particles = 18
         self.arafah_takbeer_lines = [
-            'اللَّهُ أَكْبَرُ، اللَّهُ أَكْبَرُ',
+            'الله أكبر الله أكبر الله أكبر',
             'لَا إِلٰهَ إِلَّا اللَّه',
-            'اللَّهُ أَكْبَرُ، اللَّهُ أَكْبَرُ وَلِلَّهِ الْحَمْد',
+            'اللَّهُ أَكْبَرُ، اللَّهُ أَكْبَرُ، وَلِلَّهِ الْحَمْد',
         ]
+        self.arafah_takbeer_shower_text = '\n\n'.join(self.arafah_takbeer_lines)
         self.arafah_takbeer_cycle_order = ['Fajr', 'Duhr', 'Asr', 'Maghrib']
         self.arafah_takbeer_display_seconds = 3
         self.arafah_takbeer_pause_seconds = 15
@@ -187,7 +192,8 @@ class IslamicBackground:
         self.arafah_takbeer_end_date = None
         self.show_arafah_takbeer_panel = True
         self.show_takbeer_shower = True
-        self.takbeer_shower_tick_ms = 140
+        self.takbeer_shower_tick_ms = 16
+        self.takbeer_shower_last_tick_mono = None
 
         # Current prayer glow animation
         self.glow_tick_ms = 80
@@ -414,6 +420,17 @@ class IslamicBackground:
             except:
                 pass
 
+    def _on_window_mapped(self, event=None):
+        """Apply fullscreen once the window is truly visible to avoid taskbar bleed-through."""
+        if self._mapped_fullscreen_fix_done:
+            return
+        self._mapped_fullscreen_fix_done = True
+        try:
+            self.root.after(80, self._enter_fullscreen)
+            self.root.after(380, self._enter_fullscreen)
+        except:
+            pass
+
     def _enter_fullscreen(self, event=None):
         """Enter reliable fullscreen, especially on Windows where taskbar can remain visible."""
         try:
@@ -421,6 +438,12 @@ class IslamicBackground:
             screen_w = self.root.winfo_screenwidth()
             screen_h = self.root.winfo_screenheight()
             if sys.platform.startswith('win'):
+                # Reset then reapply to force shell/taskbar recalculation.
+                self.root.overrideredirect(False)
+                self.root.state('normal')
+                self.root.state('zoomed')
+                self.root.update_idletasks()
+                self.root.attributes('-fullscreen', True)
                 self.root.overrideredirect(True)
                 self.root.geometry(f"{screen_w}x{screen_h}+0+0")
                 self.root.state('normal')
@@ -754,13 +777,15 @@ class IslamicBackground:
             return False
         if not bool(getattr(self, 'show_arafah_takbeer_panel', True)):
             return False
+        if not bool(getattr(self, 'show_takbeer_shower', True)):
+            return False
         if bool(getattr(self, 'athan_callout_prayer', None)):
             return False
         if self.iqamah_overlay_visible:
             return False
         if not self.is_takbeer_shower_window(self.get_current_date()):
             return False
-        return self._get_arafah_takbeer_active_key() is not None
+        return True
 
     def schedule_takbeer_shower_animation(self):
         """Animate takbeer lines showering downward using the same show/pause interval cycle."""
@@ -771,68 +796,156 @@ class IslamicBackground:
             if not self._should_draw_takbeer_shower():
                 self.canvas.delete('takbeer_shower')
                 self.arafah_takbeer_particles = []
+                self.takbeer_shower_last_tick_mono = None
                 return
 
             width = max(1, self.canvas.winfo_width())
             height = max(1, self.canvas.winfo_height())
 
-            active_particles = []
+            now_mono = time.monotonic()
+            if self.takbeer_shower_last_tick_mono is None:
+                dt = max(0.01, self.takbeer_shower_tick_ms / 1000.0)
+            else:
+                dt = max(0.01, min(0.12, now_mono - self.takbeer_shower_last_tick_mono))
+            self.takbeer_shower_last_tick_mono = now_mono
+
+            lanes = [0.24, 0.5, 0.76]
+            spawn_y = -float(self.us(70, 36))
+            despawn_y = float(height + self.us(120, 70))
+            fall_speed = float(self.us(170, 100))
+            particle_font_size = self.fs(40, 22)
+
+            existing_by_lane = {}
             for particle in list(getattr(self, 'arafah_takbeer_particles', [])):
-                item_id = particle.get('id')
-                if not item_id:
-                    continue
                 try:
-                    if not self.canvas.type(item_id):
-                        continue
-                except:
+                    lane_idx = int(particle.get('lane', -1))
+                except Exception:
+                    lane_idx = -1
+                if lane_idx < 0 or lane_idx >= len(lanes):
+                    item_id = particle.get('id')
+                    outline_ids = list(particle.get('outline_ids', []))
+                    if item_id:
+                        try:
+                            self.canvas.delete(item_id)
+                        except:
+                            pass
+                    for outline_id in outline_ids:
+                        try:
+                            self.canvas.delete(outline_id)
+                        except:
+                            pass
                     continue
-
-                vy = float(particle.get('vy', 2.0))
-                self.canvas.move(item_id, 0, vy)
-                y_new = float(particle.get('y', 0.0)) + vy
-                particle['y'] = y_new
-                if y_new <= (height + self.us(40, 20)):
-                    active_particles.append(particle)
+                if lane_idx not in existing_by_lane:
+                    existing_by_lane[lane_idx] = particle
                 else:
+                    item_id = particle.get('id')
+                    outline_ids = list(particle.get('outline_ids', []))
+                    if item_id:
+                        try:
+                            self.canvas.delete(item_id)
+                        except:
+                            pass
+                    for outline_id in outline_ids:
+                        try:
+                            self.canvas.delete(outline_id)
+                        except:
+                            pass
+
+            shower_text = str(getattr(self, 'arafah_takbeer_shower_text', '') or '').strip()
+            if not shower_text:
+                shower_text = '\n\n'.join(self.arafah_takbeer_lines[:3])
+
+            next_particles = []
+            for lane_idx in range(len(lanes)):
+                lane_x = int(width * lanes[lane_idx])
+                particle = existing_by_lane.get(lane_idx, {
+                    'id': None,
+                    'lane': lane_idx,
+                    'text': shower_text,
+                    'y': float(spawn_y),
+                    'vy': float(fall_speed),
+                })
+                particle['text'] = shower_text
+
+                item_id = particle.get('id')
+                outline_ids = list(particle.get('outline_ids', []))
+                item_alive = False
+                if item_id:
                     try:
-                        self.canvas.delete(item_id)
+                        item_alive = bool(self.canvas.type(item_id))
                     except:
-                        pass
+                        item_alive = False
+                outline_alive = False
+                if outline_ids:
+                    try:
+                        outline_alive = all(bool(self.canvas.type(oid)) for oid in outline_ids)
+                    except:
+                        outline_alive = False
 
-            self.arafah_takbeer_particles = active_particles
+                if (not item_alive) or (not outline_alive):
+                    if item_id:
+                        try:
+                            self.canvas.delete(item_id)
+                        except:
+                            pass
+                    for outline_id in outline_ids:
+                        try:
+                            self.canvas.delete(outline_id)
+                        except:
+                            pass
 
-            max_particles = max(6, int(getattr(self, 'arafah_takbeer_max_particles', 18)))
-            if len(self.arafah_takbeer_particles) < max_particles and random.random() < 0.65:
-                lanes = [0.24, 0.5, 0.76]
-                lane_gap = self.us(220, 120)
-                spawn_y = -self.us(40, 22)
-
-                for lane_idx, line_text in enumerate(self.arafah_takbeer_lines):
-                    lane_x = int(width * lanes[min(lane_idx, len(lanes) - 1)])
-                    lane_busy = any(
-                        p.get('lane') == lane_idx and float(p.get('y', 0.0)) < lane_gap
-                        for p in self.arafah_takbeer_particles
-                    )
-                    if lane_busy:
-                        continue
-
-                    font_size = self.fs(random.randint(34, 44), random.randint(18, 24))
-                    text_id = self.canvas.create_text(
+                    outline_offsets = [(-2, -2), (-2, 0), (-2, 2), (0, -2), (0, 2), (2, -2), (2, 0), (2, 2)]
+                    outline_ids = []
+                    outline_specs = []
+                    for dx, dy in outline_offsets:
+                        oid = self.canvas.create_text(
+                            lane_x + dx,
+                            spawn_y + dy,
+                            text=shower_text,
+                            font=('Traditional Arabic', particle_font_size, 'bold'),
+                            fill='#000000',
+                            anchor='n',
+                            justify='center',
+                            tags=('takbeer_shower',)
+                        )
+                        outline_ids.append(oid)
+                        outline_specs.append((oid, dx, dy))
+                    item_id = self.canvas.create_text(
                         lane_x,
                         spawn_y,
-                        text=line_text,
-                        font=('Traditional Arabic', font_size, 'bold'),
+                        text=shower_text,
+                        font=('Traditional Arabic', particle_font_size, 'bold'),
                         fill='#f8fbff',
                         anchor='n',
                         justify='center',
                         tags=('takbeer_shower',)
                     )
-                    self.arafah_takbeer_particles.append({
-                        'id': text_id,
-                        'lane': lane_idx,
-                        'y': float(spawn_y),
-                        'vy': random.uniform(self.us(6, 3), self.us(10, 5))
-                    })
+                    particle['id'] = item_id
+                    particle['outline_ids'] = outline_ids
+                    particle['outline_specs'] = outline_specs
+                    particle['y'] = float(spawn_y)
+
+                y_new = float(particle.get('y', spawn_y)) + (float(particle.get('vy', fall_speed)) * dt)
+                if y_new > despawn_y:
+                    y_new = float(spawn_y)
+                particle['y'] = y_new
+                try:
+                    outline_specs = list(particle.get('outline_specs', []))
+                    if outline_specs:
+                        for outline_id, dx, dy in outline_specs:
+                            self.canvas.coords(outline_id, lane_x + dx, y_new + dy)
+                            self.canvas.itemconfig(outline_id, text=shower_text)
+                    else:
+                        for outline_id in list(particle.get('outline_ids', [])):
+                            self.canvas.coords(outline_id, lane_x - 2, y_new - 2)
+                            self.canvas.itemconfig(outline_id, text=shower_text)
+                    self.canvas.coords(item_id, lane_x, y_new)
+                    self.canvas.itemconfig(item_id, text=shower_text)
+                except:
+                    pass
+                next_particles.append(particle)
+
+            self.arafah_takbeer_particles = next_particles
 
             self.canvas.tag_raise('takbeer_shower')
         except Exception as e:
@@ -6073,7 +6186,8 @@ class IslamicBackground:
             y = left_panel_y + header_h + row_gap + (idx * (row_h + row_gap))
             change_info = self.changing_prayers.get(key, {}) if key in self.changing_prayers else {}
             tomorrow_iqamah_overlay = (change_info.get('tomorrow_iqama') or '--').strip()
-            has_change_overlay = False
+            has_change_overlay = bool(change_info and tomorrow_iqamah_overlay and tomorrow_iqamah_overlay != '--')
+            active_change_overlay = has_change_overlay and bool(self.ribbon_visible)
             if has_change_overlay and key == 'Fajr' and 'AM' not in tomorrow_iqamah_overlay and 'PM' not in tomorrow_iqamah_overlay:
                 tomorrow_iqamah_overlay = tomorrow_iqamah_overlay + ' AM'
 
@@ -6107,7 +6221,7 @@ class IslamicBackground:
             badge_dx = self.us(18, 9)
             badge_dy = self.us(12, 6)
 
-            if key == next_prayer_key and not has_change_overlay:
+            if key == next_prayer_key and not active_change_overlay:
                 badge_w = self.us(116, 66)
                 badge_h = self.us(44, 26)
                 badge_x = (left_panel_x + left_panel_w) - (badge_w / 2) + badge_dx
@@ -6166,12 +6280,13 @@ class IslamicBackground:
 
             name_left_x = left_panel_x + self.us(20, 12)
 
-            if has_change_overlay:
+            if active_change_overlay:
+                ribbon_state = 'normal' if self.ribbon_visible else 'hidden'
                 notice_x = left_panel_x + self.us(2, 1)
                 notice_y = y + self.us(2, 1)
                 notice_w = left_panel_w - self.us(4, 2)
                 notice_h = row_h - self.us(4, 2)
-                self.draw_alpha_fill(
+                notice_bg = self.draw_alpha_fill(
                     notice_x,
                     notice_y,
                     notice_w,
@@ -6182,49 +6297,51 @@ class IslamicBackground:
                     outline_color='#d32f2f',
                     outline_width=self.us(3, 2)
                 )
+                self.canvas.itemconfigure(notice_bg, state=ribbon_state, tags=('prayer_change_ribbon', 'prayer_change_ribbon_bg'))
 
                 overlay_center_x = left_panel_x + (left_panel_w / 2)
                 overlay_center_y = y + (row_h / 2)
                 show_arabic_name = bool(getattr(self, 'salah_names_show_arabic', False))
+                arabic_time_text = tomorrow_iqamah_overlay
+                arabic_time_text = arabic_time_text.replace(' AM', ' صباحًا').replace(' PM', ' مساءً')
+                arabic_time_text = arabic_time_text.replace(' am', ' صباحًا').replace(' pm', ' مساءً')
                 if show_arabic_name:
-                    prefix_text = f"\u202B{arabic} الإقامة تتغير إلى "
-                    suffix_text = ' غداً\u202C'
+                    full_overlay_text = self._prepare_canvas_rtl_text(
+                        f"تتغيّر إقامة صلاة {arabic} إلى الساعة {arabic_time_text} غدًا"
+                    )
                 else:
                     prefix_text = f'{display_name} Iqamah changes to '
                     suffix_text = ' Tomorrow'
-                new_time_text = tomorrow_iqamah_overlay
-                overlay_font = (ui_family, self.fs(30, 16), 'bold')
-                overlay_font_obj = tkfont.Font(font=overlay_font)
-                prefix_w = overlay_font_obj.measure(prefix_text)
-                new_time_w = overlay_font_obj.measure(new_time_text)
-                suffix_w = overlay_font_obj.measure(suffix_text)
-                total_w = prefix_w + new_time_w + suffix_w
+                    new_time_text = tomorrow_iqamah_overlay
+                max_text_width = max(self.us(420, 220), notice_w - self.us(44, 24))
+                overlay_font_size = self.fs(36, 19)
+                min_overlay_font_size = self.fs(22, 12)
+
+                while True:
+                    overlay_font = (ui_family, overlay_font_size, 'bold')
+                    overlay_font_obj = tkfont.Font(font=overlay_font)
+                    if show_arabic_name:
+                        total_w = overlay_font_obj.measure(full_overlay_text)
+                    else:
+                        prefix_w = overlay_font_obj.measure(prefix_text)
+                        new_time_w = overlay_font_obj.measure(new_time_text)
+                        suffix_w = overlay_font_obj.measure(suffix_text)
+                        total_w = prefix_w + new_time_w + suffix_w
+                    if total_w <= max_text_width or overlay_font_size <= min_overlay_font_size:
+                        break
+                    overlay_font_size -= 1
 
                 if show_arabic_name:
-                    right_x = overlay_center_x + (total_w / 2)
+                    right_x = notice_x + notice_w - self.us(22, 12)
                     self.canvas.create_text(
                         right_x,
                         overlay_center_y,
-                        text=prefix_text,
+                        text=full_overlay_text,
                         font=overlay_font,
                         fill='black',
-                        anchor='e'
-                    )
-                    self.canvas.create_text(
-                        right_x - prefix_w,
-                        overlay_center_y,
-                        text=new_time_text,
-                        font=overlay_font,
-                        fill='#c62828',
-                        anchor='e'
-                    )
-                    self.canvas.create_text(
-                        right_x - prefix_w - new_time_w,
-                        overlay_center_y,
-                        text=suffix_text,
-                        font=overlay_font,
-                        fill='#2e7d32',
-                        anchor='e'
+                        anchor='e',
+                        tags=('prayer_change_ribbon',),
+                        state=ribbon_state
                     )
                 else:
                     start_x = overlay_center_x - (total_w / 2)
@@ -6234,7 +6351,9 @@ class IslamicBackground:
                         text=prefix_text,
                         font=overlay_font,
                         fill='black',
-                        anchor='w'
+                        anchor='w',
+                        tags=('prayer_change_ribbon',),
+                        state=ribbon_state
                     )
                     self.canvas.create_text(
                         start_x + prefix_w,
@@ -6242,7 +6361,9 @@ class IslamicBackground:
                         text=new_time_text,
                         font=overlay_font,
                         fill='#c62828',
-                        anchor='w'
+                        anchor='w',
+                        tags=('prayer_change_ribbon',),
+                        state=ribbon_state
                     )
                     self.canvas.create_text(
                         start_x + prefix_w + new_time_w,
@@ -6250,7 +6371,9 @@ class IslamicBackground:
                         text=suffix_text,
                         font=overlay_font,
                         fill='#2e7d32',
-                        anchor='w'
+                        anchor='w',
+                        tags=('prayer_change_ribbon',),
+                        state=ribbon_state
                     )
             else:
                 name_font_size = row_name_font_size
@@ -6510,6 +6633,20 @@ class IslamicBackground:
         progress = max(0.0, min(1.0, float(getattr(self, 'salah_name_transition_progress', 1.0))))
         eased = progress * progress * (3.0 - (2.0 * progress))
         return True, source_show_arabic, target_show_arabic, eased
+
+    def _prepare_canvas_rtl_text(self, text):
+        """Prepare Arabic text for Tk canvas rendering when bidi shaping is limited."""
+        try:
+            raw_text = str(text or '').replace('\u202B', '').replace('\u202C', '').strip()
+            if not raw_text:
+                return raw_text
+            # If Arabic letters are present, reverse token order for visual RTL flow on Tk canvas.
+            if re.search(r'[\u0600-\u06FF]', raw_text):
+                parts = [part for part in raw_text.split(' ') if part]
+                return ' '.join(reversed(parts))
+            return raw_text
+        except Exception:
+            return str(text or '')
     
     def draw_prayer_box(self, x, y, width, height, name, arabic, athan, iqamah, is_current=False, show_tomorrow_iqamah=False, prayer_key=None, tomorrow_iqamah=None):
         """Draw a single prayer time box with rounded corners"""
@@ -7821,7 +7958,12 @@ class IslamicBackground:
                 self.ribbon_cycle_counter = (self.ribbon_cycle_counter + 1) % cycle_total
                 self.ribbon_visible = (self.ribbon_cycle_counter < show_seconds)
                 if self.ribbon_visible != prev_visible:
-                    self._start_ribbon_transition(self.ribbon_visible)
+                    if self._ribbon_transition_running:
+                        self._ribbon_transition_running = False
+                        self._clear_ribbon_transition_artifacts()
+                    state = 'normal' if self.ribbon_visible else 'hidden'
+                    self.canvas.itemconfig('prayer_change_ribbon', state=state)
+                    self.redraw_full_display()
                 elif not self._ribbon_transition_running:
                     state = 'normal' if self.ribbon_visible else 'hidden'
                     self.canvas.itemconfig('prayer_change_ribbon', state=state)
