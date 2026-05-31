@@ -320,6 +320,10 @@ class IslamicBackground:
         
         # Jummah time (loaded from CSV or config/jummah.txt)
         self.jummah_time = None
+        self.show_background_every_seconds = 60
+        self.show_background_duration_seconds = 5
+        self._background_cycle_started_mono = time.monotonic()
+        self._background_cycle_visible = False
 
         # Test mode indicator canvas IDs (updated in-place)
         self.test_mode_box_id = None
@@ -515,6 +519,25 @@ class IslamicBackground:
                 return datetime.now().time()
         return datetime.now().time()
 
+    def should_show_periodic_background_image(self):
+        """Return True only during the configured periodic background-image window."""
+        if getattr(self, 'iqamah_overlay_visible', False):
+            return False
+
+        every = max(0, int(getattr(self, 'show_background_every_seconds', 0) or 0))
+        duration = max(0, int(getattr(self, 'show_background_duration_seconds', 0) or 0))
+
+        if every <= 0 or duration <= 0:
+            return False
+
+        cycle_length = every + duration
+        if cycle_length <= 0:
+            return False
+
+        elapsed = max(0.0, time.monotonic() - getattr(self, '_background_cycle_started_mono', time.monotonic()))
+        phase = elapsed % cycle_length
+        return phase >= every
+
     def handle_date_rollover(self, new_date):
         """Refresh data and full UI when calendar date changes."""
         if self._date_rollover_refresh_in_progress:
@@ -630,9 +653,16 @@ class IslamicBackground:
                 except:
                     pass
                 self._weather_cycle_after_id = None
-            self.draw_islamic_background()
-            self.draw_prayer_times()
-            self.draw_test_mode_indicator()
+            if self.should_show_periodic_background_image():
+                width = self.canvas.winfo_width()
+                height = self.canvas.winfo_height()
+                if not self.draw_background_image(width, height):
+                    self.draw_islamic_background()
+                self.draw_background_image_label(width, height)
+            else:
+                self.draw_islamic_background()
+                self.draw_prayer_times()
+                self.draw_test_mode_indicator()
             if athan_running:
                 self._draw_athan_shine_frame(0)
             # Re-show iqamah overlay if it was active (canvas.delete wiped it)
@@ -1637,6 +1667,9 @@ class IslamicBackground:
                 "location": "MASJID AL-SALAM",
                 "prayernow": 3,
                 "shrouqplus": 10,
+                "shrooqends": 15,
+                "showbackgroundevery": 60,
+                "showbackgroundduration": 5,
                 "overwritebglog": "no",
                 "theme": "moon",
                 "arabicchangeevery": 30,
@@ -1687,6 +1720,25 @@ class IslamicBackground:
         # Optional full-screen background image path
         self.config['background_image'] = str(self.config.get('background_image', '')).strip()
 
+        # Periodic background-image reveal settings.
+        # showbackgroundevery=0 disables periodic background image display entirely.
+        try:
+            show_background_every = int(self.config.get('showbackgroundevery', 60))
+            show_background_every = max(0, show_background_every)
+        except:
+            show_background_every = 60
+        try:
+            show_background_duration = int(self.config.get('showbackgroundduration', 5))
+            show_background_duration = max(0, show_background_duration)
+        except:
+            show_background_duration = 5
+        self.config['showbackgroundevery'] = show_background_every
+        self.config['showbackgroundduration'] = show_background_duration
+        self.show_background_every_seconds = show_background_every
+        self.show_background_duration_seconds = show_background_duration
+        if not hasattr(self, '_background_cycle_started_mono'):
+            self._background_cycle_started_mono = time.monotonic()
+
         # Post-prayer overlay duration in minutes (configurable)
         try:
             prayernow_minutes = int(self.config.get('prayernow', 3))
@@ -1729,6 +1781,15 @@ class IslamicBackground:
         except:
             shrouq_plus_minutes = 10
         self.config['shrouqplus'] = shrouq_plus_minutes
+
+        # Shrouq end buffer in minutes before Duhr/Jummah where no prayer is highlighted.
+        try:
+            shrooq_ends_minutes = int(self.config.get('shrooqends', 15))
+            shrooq_ends_minutes = max(0, shrooq_ends_minutes)
+        except:
+            shrooq_ends_minutes = 15
+        self.config['shrooqends'] = shrooq_ends_minutes
+        self.shrooq_ends_minutes = shrooq_ends_minutes
 
         # Red prayer-change ribbon visibility timings (seconds)
         try:
@@ -3131,29 +3192,45 @@ class IslamicBackground:
         is_friday = (self.get_current_date().weekday() == 4)
         _, sunrise_time = self.resolve_sunrise_time(prayers_data)
         shrouq_plus = max(0, int(self.config.get('shrouqplus', 10)))
+        shrooq_ends_minutes = max(0, int(getattr(self, 'shrooq_ends_minutes', self.config.get('shrooqends', 15))))
         shrouq_start_time = None
         if sunrise_time:
             shrouq_start_time = (datetime.combine(self.get_current_date(), sunrise_time) + timedelta(minutes=shrouq_plus)).time()
+
+        duhr_athan = self.parse_time(prayers_data.get('DuhrAthan', ''))
+        jummah_time = self.jummah_time or self.parse_time('1:30 PM') if is_friday else None
+        shrouq_anchor_time = jummah_time if (is_friday and jummah_time) else duhr_athan
+        shrouq_end_time = None
+        if shrouq_start_time and shrouq_anchor_time:
+            shrouq_start_dt = datetime.combine(self.get_current_date(), shrouq_start_time)
+            shrouq_anchor_dt = datetime.combine(self.get_current_date(), shrouq_anchor_time)
+            shrouq_end_dt = shrouq_anchor_dt - timedelta(minutes=shrooq_ends_minutes)
+            if shrouq_end_dt > shrouq_start_dt:
+                shrouq_end_time = shrouq_end_dt.time()
+
+        if shrouq_start_time and shrouq_end_time and shrouq_start_time <= now < shrouq_end_time:
+            return 'Shrouq'
+
+        if shrouq_end_time and shrouq_anchor_time and shrouq_end_time <= now < shrouq_anchor_time:
+            # Intentionally show no current prayer in this gap before Duhr/Jummah.
+            return None
 
         if is_friday:
             asr_athan = self.parse_time(prayers_data.get('AsrAthan', ''))
             friday_duhr_start = self.parse_time('2:15 PM')
             jummah_time = self.jummah_time or self.parse_time('1:30 PM')
 
-            if shrouq_start_time and jummah_time and shrouq_start_time <= now < jummah_time:
-                return 'Shrouq'
-
             if jummah_time and friday_duhr_start and jummah_time <= now < friday_duhr_start:
                 return 'Jummah'
 
             if friday_duhr_start and asr_athan and friday_duhr_start <= now < asr_athan:
-                return 'Duhr'
+                # Friday: keep midday row unhighlighted after Duhr enters.
+                return None
 
         # Current period boundaries by Athan-style starts, including Shrouq via Sunrise.
         # This keeps prayer highlighting consistent throughout each period.
         prayer_schedule = [
             ('Fajr', self.parse_time(prayers_data.get('FajrAthan', ''))),
-            ('Shrouq', shrouq_start_time),
             ('Duhr', self.parse_time(prayers_data.get('DuhrAthan', ''))),
             ('Asr', self.parse_time(prayers_data.get('AsrAthan', ''))),
             ('Maghrib', self.parse_time(prayers_data.get('MaghribAthan', ''))),
@@ -3243,7 +3320,6 @@ class IslamicBackground:
             schedule = [
                 ('Fajr', self.parse_time(prayers_data.get('FajrIqama', ''))),
                 ('Jummah', (self.jummah_time or self.parse_time('1:30 PM'))),
-                ('Duhr', self.parse_time('2:15 PM')),
                 ('Asr', self.parse_time(prayers_data.get('AsrIqama', ''))),
                 ('Maghrib', self.parse_time(prayers_data.get('MaghribIqama', ''))),
                 ('Isha', self.parse_time(prayers_data.get('IshaIqama', '')))
@@ -3445,6 +3521,8 @@ class IslamicBackground:
                 'isha': 'Isha',
             }
             key = prayer_key_map.get(str(prayer).strip().lower(), str(prayer).strip())
+            if key == 'Duhr' and self.get_current_date().weekday() == 4:
+                return '--:--:--'
             iqamah_time = self.parse_time(prayers_data.get(f'{key}Iqama', ''))
 
             now_dt = datetime.combine(self.get_current_date(), self.get_current_time())
@@ -3466,8 +3544,11 @@ class IslamicBackground:
 
             current_date = self.get_current_date()
             now_dt = datetime.combine(current_date, self.get_current_time())
+            is_friday = (current_date.weekday() == 4)
 
             for prayer_name in ['Fajr', 'Duhr', 'Asr', 'Maghrib', 'Isha']:
+                if is_friday and prayer_name == 'Duhr':
+                    continue
                 athan_time = self.parse_time(prayers_data.get(f'{prayer_name}Athan', ''))
                 if not athan_time:
                     continue
@@ -3869,6 +3950,12 @@ class IslamicBackground:
             if current_date != self._last_seen_date:
                 self.handle_date_rollover(current_date)
 
+            periodic_bg_visible = self.should_show_periodic_background_image()
+            if periodic_bg_visible != getattr(self, '_background_cycle_visible', False):
+                self._background_cycle_visible = periodic_bg_visible
+                if not self.iqamah_overlay_visible and not self._is_full_redraw:
+                    self.redraw_full_display()
+
             self.update_salah_name_rotation_state()
 
             if self.current_time_text_id:
@@ -3985,6 +4072,7 @@ class IslamicBackground:
 
             mocked_date = self.get_current_date()
             now_dt = datetime.combine(mocked_date, current_time)
+            friday_duhr_start = self.parse_time('2:15 PM') if is_friday else None
 
             # After post-iqamah phase ends, keep app on main page for a short cooldown
             if self.iqamah_overlay_cooldown_until and now_dt < self.iqamah_overlay_cooldown_until:
@@ -3994,6 +4082,15 @@ class IslamicBackground:
                 return
 
             for prayer in overlay_prayers:
+                # Friday rule: keep Jummah khutbah countdown, but skip Duhr iqamah phase after Duhr start.
+                if (
+                    prayer == 'Duhr'
+                    and is_friday
+                    and friday_duhr_start
+                    and now_dt >= datetime.combine(mocked_date, friday_duhr_start)
+                ):
+                    continue
+
                 display_prayer = 'Jummah' if (prayer == 'Duhr' and is_friday) else prayer
 
                 athan_time = self.parse_time(prayers_data.get(f'{prayer}Athan', ''))
@@ -4206,7 +4303,15 @@ class IslamicBackground:
                 prayer_display = self.current_prayer_name or ''
                 left_text = f'{prayer_display} iqamah changes to '
                 right_text = f'{iqamah_change_notice} TOMORROW'
-                notice_font = ('Arial', self.fs(52, 24), 'bold')
+                notice_font_size = self.fs(78, 36)
+                min_notice_font_size = self.fs(50, 24)
+                max_notice_text_width = width - self.us(120, 60)
+                while notice_font_size > min_notice_font_size:
+                    test_font = ('Arial', notice_font_size, 'bold')
+                    if tkfont.Font(font=test_font).measure(left_text + right_text) <= max_notice_text_width:
+                        break
+                    notice_font_size -= 1
+                notice_font = ('Arial', notice_font_size, 'bold')
                 outline_px = self.us(3, 2)
 
                 change_notice_left = self.draw_outlined_text(
@@ -4904,6 +5009,11 @@ class IslamicBackground:
                     self.canvas.delete(item_id)
                 except:
                     pass
+            # Safety purge: remove any overlay helper copies not tracked in iqamah_overlay_ids.
+            try:
+                self.canvas.delete('iqamah_overlay')
+            except:
+                pass
         finally:
             self.iqamah_overlay_ids = []
     
@@ -4919,6 +5029,12 @@ class IslamicBackground:
             self.iqamah_overlay_mode = None
             self.current_prayer_iqamah_time = None
             self.current_prayer_name = None
+
+            # Return to main screen immediately without waiting for next timer tick.
+            try:
+                self.redraw_full_display()
+            except:
+                pass
 
             # Restore prayer-change ribbon visibility state after overlay closes.
             if not self._ribbon_transition_running:
@@ -5017,6 +5133,13 @@ class IslamicBackground:
 
             # Hard transition: never remain on countdown overlay at 00:00
             if self.iqamah_overlay_mode == 'countdown' and countdown == '00:00':
+                is_friday_jummah = (
+                    self.current_prayer_name == 'Jummah'
+                    and self.get_current_date().weekday() == 4
+                )
+                if is_friday_jummah:
+                    self.hide_iqamah_overlay()
+                    return
                 if self.iqamah_post_duration_seconds > 0:
                     self.show_post_iqamah_overlay()
                     self.iqamah_overlay_visible = True
@@ -6344,12 +6467,28 @@ class IslamicBackground:
                         state=ribbon_state
                     )
                 else:
+                    prefix_text = f'{display_name} Iqamah changes to '
+                    suffix_text = ' Tomorrow'
+                    one_line_font_size = self.fs(34, 19)
+                    min_one_line_font_size = self.fs(20, 11)
+
+                    while True:
+                        one_line_font = (ui_family, one_line_font_size, 'bold')
+                        one_line_font_obj = tkfont.Font(font=one_line_font)
+                        prefix_w = one_line_font_obj.measure(prefix_text)
+                        new_time_w = one_line_font_obj.measure(new_time_text)
+                        suffix_w = one_line_font_obj.measure(suffix_text)
+                        total_w = prefix_w + new_time_w + suffix_w
+                        if total_w <= max_text_width or one_line_font_size <= min_one_line_font_size:
+                            break
+                        one_line_font_size -= 1
+
                     start_x = overlay_center_x - (total_w / 2)
                     self.canvas.create_text(
                         start_x,
                         overlay_center_y,
                         text=prefix_text,
-                        font=overlay_font,
+                        font=one_line_font,
                         fill='black',
                         anchor='w',
                         tags=('prayer_change_ribbon',),
@@ -6359,7 +6498,7 @@ class IslamicBackground:
                         start_x + prefix_w,
                         overlay_center_y,
                         text=new_time_text,
-                        font=overlay_font,
+                        font=one_line_font,
                         fill='#c62828',
                         anchor='w',
                         tags=('prayer_change_ribbon',),
@@ -6369,7 +6508,7 @@ class IslamicBackground:
                         start_x + prefix_w + new_time_w,
                         overlay_center_y,
                         text=suffix_text,
-                        font=overlay_font,
+                        font=one_line_font,
                         fill='#2e7d32',
                         anchor='w',
                         tags=('prayer_change_ribbon',),
@@ -6802,7 +6941,7 @@ class IslamicBackground:
             self.canvas.create_text(
                 center_x, line1_y,
                 text=name.upper(),
-                font=('Arial', self.fs(46, 23), 'bold'),
+                font=('Arial', self.fs(66, 33), 'bold'),
                 fill='black',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
@@ -6812,7 +6951,7 @@ class IslamicBackground:
             self.canvas.create_text(
                 center_x, iqamah_label_y,
                 text='Iqamah',
-                font=('Arial', self.fs(30, 15), 'bold'),
+                font=('Arial', self.fs(54, 27), 'bold'),
                 fill='#2E7D32',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
@@ -6822,8 +6961,8 @@ class IslamicBackground:
             self.draw_time_text_with_meridiem(
                 center_x, line2_y,
                 tomorrow_iqamah,
-                main_size=self.fs(54, 27),
-                suffix_size=self.fs(24, 12),
+                main_size=self.fs(78, 39),
+                suffix_size=self.fs(34, 17),
                 color='#ff0000',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
@@ -6833,7 +6972,7 @@ class IslamicBackground:
             self.canvas.create_text(
                 center_x, line3_y,
                 text='TOMORROW',
-                font=('Arial', self.fs(34, 17), 'bold'),
+                font=('Arial', self.fs(50, 25), 'bold'),
                 fill='#ff0000',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
