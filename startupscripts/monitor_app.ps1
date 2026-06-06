@@ -18,6 +18,7 @@ $PORTABLE_ROOT = Split-Path -Parent (Split-Path -Parent $APP_EXE)
 $STATE_DIR = Join-Path $PORTABLE_ROOT ".update_state"
 $LAST_SHA_FILE = Join-Path $STATE_DIR "portable_last_sha.txt"
 $LAST_EXE_SHA_FILE = Join-Path $STATE_DIR "portable_exe_sha.txt"
+$LAST_START_FILE = Join-Path $STATE_DIR "portable_last_start.txt"
 $PORTABLE_EXE_RELATIVE_PATH = "standalone/PrayerTimeDisplay.exe"
 
 function Write-Log {
@@ -33,6 +34,23 @@ function Ensure-Setup {
     }
     if (-not (Test-Path $STATE_DIR)) {
         New-Item -Path $STATE_DIR -ItemType Directory -Force | Out-Null
+    }
+}
+
+function Is-AnotherMonitorInstanceRunning {
+    try {
+        $currentPid = $PID
+        $processes = Get-CimInstance Win32_Process -ErrorAction Stop |
+            Where-Object {
+                $_.ProcessId -ne $currentPid -and
+                $_.Name -match '^(powershell|pwsh)\.exe$' -and
+                $_.CommandLine -and
+                $_.CommandLine -match '(?i)monitor_app\.ps1'
+            }
+
+        return ($processes.Count -gt 0)
+    } catch {
+        return $false
     }
 }
 
@@ -82,16 +100,27 @@ function Is-NetworkUnavailableError {
     return $false
 }
 
+function Get-PortableAppProcesses {
+    return @(Get-Process -Name $APP_NAME -ErrorAction SilentlyContinue)
+}
+
 function Get-AppProcess {
-    return Get-Process -Name $APP_NAME -ErrorAction SilentlyContinue | Select-Object -First 1
+    $portableProcesses = Get-PortableAppProcesses
+    if ($portableProcesses.Count -gt 0) {
+        return ($portableProcesses | Sort-Object ProcessId | Select-Object -First 1)
+    }
+
+    return $null
 }
 
 function Stop-App {
-    $p = Get-AppProcess
-    if ($p) {
+    $processes = Get-PortableAppProcesses
+    if ($processes.Count -gt 0) {
         try {
-            $p | Stop-Process -Force -ErrorAction Stop
-            Write-Log "Stopped $APP_NAME for update"
+            foreach ($p in $processes) {
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            }
+            Write-Log "Stopped $APP_NAME for update ($($processes.Count) process(es))"
             Start-Sleep -Milliseconds 800
         } catch {
             Write-Log "Failed to stop ${APP_NAME}: $($_.Exception.Message)"
@@ -105,13 +134,41 @@ function Start-App {
         return
     }
 
+    $running = Get-PortableAppProcesses
+    if ($running.Count -gt 0) {
+        Write-Log "$APP_NAME already running ($($running.Count) process(es)); skipping start"
+        return
+    }
+
     try {
         $workingDir = Split-Path -Parent $APP_EXE
         $workingDir = Split-Path -Parent $workingDir
         $proc = Start-Process -FilePath $APP_EXE -WorkingDirectory $workingDir -PassThru -ErrorAction Stop
+        Set-Content -Path $LAST_START_FILE -Value ((Get-Date).ToString("o")) -Encoding UTF8
         Write-Log "Started $APP_NAME (PID: $($proc.Id))"
     } catch {
         Write-Log "Failed to start ${APP_NAME}: $($_.Exception.Message)"
+    }
+}
+
+function Was-AppStartedRecently {
+    param([int]$WindowSeconds = 120)
+
+    if (-not (Test-Path $LAST_START_FILE)) {
+        return $false
+    }
+
+    try {
+        $raw = (Get-Content -Path $LAST_START_FILE -ErrorAction Stop | Select-Object -First 1)
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            return $false
+        }
+
+        $lastStart = [DateTime]::Parse($raw, [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind)
+        $elapsed = (Get-Date) - $lastStart
+        return ($elapsed.TotalSeconds -lt $WindowSeconds)
+    } catch {
+        return $false
     }
 }
 
@@ -561,6 +618,11 @@ function Check-And-ApplyUpdates {
 
 Ensure-Setup
 
+if (Is-AnotherMonitorInstanceRunning) {
+    Write-Log "Another monitor instance is already running; skipping this cycle"
+    exit 0
+}
+
 $updatedNow = Check-And-ApplyUpdates
 $appProcess = Get-AppProcess
 
@@ -568,6 +630,10 @@ if ($updatedNow -or -not $appProcess) {
     if ($updatedNow) {
         Write-Log "Restarting app after update..."
     } else {
+        if (Was-AppStartedRecently -WindowSeconds 120) {
+            Write-Log "$APP_NAME start suppressed: app was started recently"
+            exit 0
+        }
         Write-Log "$APP_NAME not running. Starting now..."
     }
     Start-App
