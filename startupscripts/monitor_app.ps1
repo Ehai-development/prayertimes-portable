@@ -495,15 +495,12 @@ function Check-And-ApplyUpdates {
         if ([string]::IsNullOrWhiteSpace($localSha)) {
             Save-LocalPortableCommitSha -Sha $remoteSha
             Write-Log "Initialized update state to current remote SHA"
-            return (Ensure-PortableExeUpToDate -Ref $remoteSha)
+            return $false
         }
 
         if ($localSha -eq $remoteSha) {
-            $exeUpdated = Ensure-PortableExeUpToDate -Ref $remoteSha
-            if (-not $exeUpdated) {
-                Write-Log "No portable updates"
-            }
-            return $exeUpdated
+            Write-Log "No portable updates"
+            return $false
         }
 
         try {
@@ -544,15 +541,8 @@ function Check-And-ApplyUpdates {
         $updated = Sync-ChangedPortableFilesFromGitHub -ChangedFiles $changedFiles -HeadSha $remoteSha
         Save-LocalPortableCommitSha -Sha $remoteSha
 
-        $exeUpdated = Ensure-PortableExeUpToDate -Ref $remoteSha
-
         if ($updated) {
             Write-Log "Portable changed files applied successfully"
-            return $true
-        }
-
-        if ($exeUpdated) {
-            Write-Log "Executable updated successfully"
             return $true
         }
 
