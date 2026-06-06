@@ -19,9 +19,9 @@
 
 4. **Verify it worked:**
    ```
-   tasklist /v | find "Prayer"
+   schtasks /query /tn "PrayerTime App Monitor" /v /fo list
    ```
-   You should see "Prayer Time Display Monitor" in the list.
+   You should see "Scheduled Task State: Enabled" and "Repeat: Every: 0 Hour(s), 1 Minute(s)".
 
 ---
 
@@ -53,6 +53,12 @@ Once installed, the monitor will:
 A: This usually means the setup script wasn't run as Administrator. Try again:
    - Command Prompt → Right-click → "Run as administrator"
    - Then execute: `cd C:\portable\startupscripts && setup_monitor_task.bat`
+
+If run without admin rights, setup falls back to a user-level every-minute task.
+Admin setup is still recommended because it also installs startup/login triggers.
+
+**Q: Which task name should I check?**
+A: The current task name is `PrayerTime App Monitor`.
 
 **Q: App still isn't restarting**
 A: Check the log file for errors:

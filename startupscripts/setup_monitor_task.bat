@@ -1,5 +1,5 @@
 @echo off
-REM Setup Prayer Time Display Monitor Task
+REM Setup PrayerTime App Monitor Task
 REM Run this as Administrator
 
 echo.
@@ -23,21 +23,8 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [1/2] Deleting any existing task...
-schtasks /delete /tn "Prayer Time Display Monitor" /f >nul 2>&1
-echo √ Old task cleaned up
-echo.
-
-echo [2/2] Creating new scheduled task...
-echo This will run the hidden monitor launcher every minute
-echo.
-
-schtasks /create ^
-    /tn "Prayer Time Display Monitor" ^
-    /tr "wscript.exe //B //Nologo C:\portable\startupscripts\run_monitor_hidden.vbs" ^
-    /sc minute ^
-    /mo 1 ^
-    /f
+echo [1/1] Installing monitor task via PowerShell setup script...
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0setup_monitor_task.ps1" -SkipElevation
 
 if errorlevel 1 (
     echo.
@@ -53,7 +40,7 @@ echo ╚════════════════════════
 echo.
 echo The following has been configured:
 echo.
-echo Task Name: Prayer Time Display Monitor
+echo Task Name: PrayerTime App Monitor
 echo Launcher:  C:\portable\startupscripts\run_monitor_hidden.vbs
 echo Script:    C:\portable\startupscripts\monitor_app.ps1
 echo Frequency: Every 1 minute
@@ -69,6 +56,6 @@ echo To view the log file:
 echo   type C:\portable\startupscripts\app_monitor.log
 echo.
 echo To disable the task:
-echo   schtasks /delete /tn "Prayer Time Display Monitor"
+echo   schtasks /delete /tn "PrayerTime App Monitor"
 echo.
 pause

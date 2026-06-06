@@ -1,5 +1,5 @@
 @echo off
-REM Remove Prayer Time Display Monitor Task
+REM Remove PrayerTime App Monitor Task
 REM Run this as Administrator to delete the scheduled task
 
 echo.
@@ -23,13 +23,18 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo Attempting to delete scheduled task...
-echo Task Name: Prayer Time Display Monitor
+echo Attempting to delete scheduled tasks...
+echo Task Name: PrayerTime App Monitor
 echo.
 
-schtasks /delete /tn "Prayer Time Display Monitor" /f
+schtasks /delete /tn "PrayerTime App Monitor" /f >nul 2>&1
+set "DELETED=0"
+if %errorlevel% equ 0 set "DELETED=1"
 
-if errorlevel 1 (
+schtasks /delete /tn "Prayer Time Display Monitor" /f >nul 2>&1
+if %errorlevel% equ 0 set "DELETED=1"
+
+if "%DELETED%"=="0" (
     echo.
     echo Task may not exist or deletion failed.
     echo Run this as Administrator if you see permission errors.
@@ -42,8 +47,7 @@ echo ╔════════════════════════
 echo ║        Task Deleted Successfully!                 ║
 echo ╚════════════════════════════════════════════════════╝
 echo.
-echo The "Prayer Time Display Monitor" scheduled task
-echo has been removed from Windows Task Scheduler.
+echo The monitor scheduled task has been removed from Windows Task Scheduler.
 echo.
 echo The app will no longer auto-restart if it crashes.
 echo.

@@ -13,7 +13,8 @@ if (-not $isAdmin -and -not $SkipElevation) {
     exit
 }
 
-$taskName = "Prayer Time Display Monitor"
+$taskName = "PrayerTime App Monitor"
+$legacyTaskName = "Prayer Time Display Monitor"
 $scriptPath = "C:\portable\startupscripts\monitor_app.ps1"
 $launcherPath = "C:\portable\startupscripts\run_monitor_hidden.vbs"
 
@@ -33,12 +34,26 @@ if ($existingTask) {
     Start-Sleep -Seconds 1
 }
 
+$legacyTask = Get-ScheduledTask -TaskName $legacyTaskName -ErrorAction SilentlyContinue
+if ($legacyTask) {
+    Unregister-ScheduledTask -TaskName $legacyTaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+}
+
 try {
     $action = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "//B //Nologo `"$launcherPath`""
 
-    $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    $minuteStart = (Get-Date).AddMinutes(1)
+    $trigger = New-ScheduledTaskTrigger -Once -At $minuteStart `
         -RepetitionInterval (New-TimeSpan -Minutes 1) `
         -RepetitionDuration (New-TimeSpan -Days 365)
+
+    $triggerList = @($trigger)
+    if ($isAdmin) {
+        $loginTrigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+        $startupTrigger = New-ScheduledTaskTrigger -AtStartup
+        $triggerList += @($loginTrigger, $startupTrigger)
+    }
 
     $settings = New-ScheduledTaskSettingsSet `
         -AllowStartIfOnBatteries `
@@ -47,11 +62,19 @@ try {
         -Hidden
 
     # Use current user so spawned app appears on desktop, but keep task hidden.
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
-        -LogonType Interactive `
-        -RunLevel Highest
+    if ($isAdmin) {
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
+            -LogonType Interactive `
+            -RunLevel Highest
+    } else {
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME `
+            -LogonType Interactive `
+            -RunLevel Limited
+    }
 
-    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggerList -Settings $settings -Principal $principal -Force -ErrorAction Stop | Out-Null
+
+    Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 
     Write-Host "Task created successfully: $taskName" -ForegroundColor Green
     Write-Host "Launcher: $launcherPath"
