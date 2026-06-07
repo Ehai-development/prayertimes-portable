@@ -104,13 +104,53 @@ function Get-PortableAppProcesses {
     return @(Get-Process -Name $APP_NAME -ErrorAction SilentlyContinue)
 }
 
-function Get-AppProcess {
-    $portableProcesses = Get-PortableAppProcesses
-    if ($portableProcesses.Count -gt 0) {
-        return ($portableProcesses | Sort-Object ProcessId | Select-Object -First 1)
+function Get-VisibleAppProcess {
+    $visible = @()
+    foreach ($p in (Get-PortableAppProcesses)) {
+        try {
+            $p.Refresh()
+            if ($p.MainWindowHandle -ne 0) {
+                $visible += $p
+            }
+        } catch {
+            # Ignore transient process inspection errors.
+        }
+    }
+
+    if ($visible.Count -gt 0) {
+        return ($visible | Sort-Object ProcessId | Select-Object -First 1)
     }
 
     return $null
+}
+
+function Get-AppProcess {
+    return Get-VisibleAppProcess
+}
+
+function Remove-HeadlessDuplicateProcesses {
+    param([System.Diagnostics.Process]$VisibleProcess)
+
+    if ($null -eq $VisibleProcess) {
+        return
+    }
+
+    $all = Get-PortableAppProcesses
+    foreach ($p in $all) {
+        if ($p.Id -eq $VisibleProcess.Id) {
+            continue
+        }
+
+        try {
+            $p.Refresh()
+            if ($p.MainWindowHandle -eq 0) {
+                Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+                Write-Log "Stopped headless duplicate process (PID: $($p.Id))"
+            }
+        } catch {
+            # Ignore transient process failures.
+        }
+    }
 }
 
 function Stop-App {
@@ -134,10 +174,19 @@ function Start-App {
         return
     }
 
+    $visible = Get-VisibleAppProcess
+    if ($visible) {
+        Write-Log "$APP_NAME already running with visible window (PID: $($visible.Id)); skipping start"
+        return
+    }
+
     $running = Get-PortableAppProcesses
     if ($running.Count -gt 0) {
-        Write-Log "$APP_NAME already running ($($running.Count) process(es)); skipping start"
-        return
+        Write-Log "Found headless $APP_NAME process(es) ($($running.Count)); terminating before restart"
+        foreach ($p in $running) {
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Milliseconds 700
     }
 
     try {
@@ -624,16 +673,27 @@ if (Is-AnotherMonitorInstanceRunning) {
 }
 
 $updatedNow = Check-And-ApplyUpdates
+$allProcesses = Get-PortableAppProcesses
 $appProcess = Get-AppProcess
+$forcedHeadlessRecovery = $false
+
+if ($allProcesses.Count -gt 0 -and -not $appProcess) {
+    Write-Log "Detected only headless $APP_NAME process(es). Forcing clean restart."
+    Stop-App
+    Start-Sleep -Milliseconds 500
+    $allProcesses = Get-PortableAppProcesses
+    $appProcess = Get-AppProcess
+    $forcedHeadlessRecovery = $true
+}
+
+if ($appProcess) {
+    Remove-HeadlessDuplicateProcesses -VisibleProcess $appProcess
+}
 
 if ($updatedNow -or -not $appProcess) {
     if ($updatedNow) {
         Write-Log "Restarting app after update..."
     } else {
-        if (Was-AppStartedRecently -WindowSeconds 120) {
-            Write-Log "$APP_NAME start suppressed: app was started recently"
-            exit 0
-        }
         Write-Log "$APP_NAME not running. Starting now..."
     }
     Start-App
