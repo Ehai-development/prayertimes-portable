@@ -273,6 +273,8 @@ class IslamicBackground:
         self._weather_fetching = False
         self._weather_show_forecast = False  # False=current temp, True=forecast
         self._weather_cycle_after_id = None
+        self._weather_anim_after_id = None
+        self._weather_anim_interval_ms = 95
         
         # Tracking for prayer time changes (tomorrow vs today)
         self.changing_prayers = {}  # {prayer_name: {today: time, tomorrow: time}}
@@ -374,6 +376,7 @@ class IslamicBackground:
             self.root.after(self.glow_tick_ms, self.schedule_glow_animation)
             if self.show_weather:
                 self.root.after(500, self._start_weather_fetch)
+            self.root.after(700, self._schedule_weather_animation)
         except Exception as e:
             self._log(f"[ERROR] Startup failed: {e}", flush=True)
             import traceback
@@ -5579,6 +5582,7 @@ class IslamicBackground:
             url = (f'https://api.open-meteo.com/v1/forecast'
                    f'?latitude={lat}&longitude={lon}'
                    f'&current=temperature_2m,weather_code'
+                     f'&hourly=weather_code,precipitation_probability'
                    f'&daily=weather_code,temperature_2m_max,temperature_2m_min'
                    f'&timezone=auto&forecast_days=3')
             with urllib.request.urlopen(url, timeout=15) as resp:
@@ -5591,6 +5595,50 @@ class IslamicBackground:
             current_desc = self._get_weather_desc(current_code)
 
             daily = data['daily']
+            hourly = data.get('hourly', {})
+            hourly_times = hourly.get('time', []) or []
+            hourly_codes = hourly.get('weather_code', []) or []
+            hourly_pops = hourly.get('precipitation_probability', []) or []
+
+            # Build daytime hourly buckets for each day.
+            midday_code_by_day = {}
+            daytime_codes_by_day = {}
+            daytime_popmax_by_day = {}
+            precip_codes = {
+                51, 53, 55, 56, 57, 61, 63, 65, 66, 67,
+                71, 73, 75, 77, 80, 81, 82, 85, 86,
+                95, 96, 99
+            }
+            for idx, ts in enumerate(hourly_times):
+                if idx >= len(hourly_codes):
+                    break
+                if not ts or len(ts) < 13:
+                    continue
+
+                day_key = ts[:10]
+                hour_str = ts[11:13]
+                try:
+                    hour_val = int(hour_str)
+                except:
+                    continue
+
+                code_val = hourly_codes[idx]
+
+                if hour_val == 12 and day_key not in midday_code_by_day:
+                    midday_code_by_day[day_key] = code_val
+
+                if 6 <= hour_val <= 21:
+                    daytime_codes_by_day.setdefault(day_key, []).append(code_val)
+                    pop_val = 0
+                    if idx < len(hourly_pops):
+                        try:
+                            pop_val = int(hourly_pops[idx])
+                        except:
+                            pop_val = 0
+                    prev_pop = daytime_popmax_by_day.get(day_key, 0)
+                    if pop_val > prev_pop:
+                        daytime_popmax_by_day[day_key] = pop_val
+
             forecast = []
             for i in range(1, 3):  # skip today (index 0), take next 2 days
                 try:
@@ -5598,7 +5646,18 @@ class IslamicBackground:
                     day_name = dt.strftime('%a')
                 except:
                     day_name = daily['time'][i]
-                code = daily['weather_code'][i]
+                day_key = daily['time'][i]
+                daily_code = daily['weather_code'][i]
+                day_codes = daytime_codes_by_day.get(day_key, [])
+                precip_hits = [c for c in day_codes if c in precip_codes]
+                day_popmax = daytime_popmax_by_day.get(day_key, 0)
+
+                if daily_code in precip_codes and day_popmax >= 35:
+                    code = daily_code
+                elif len(precip_hits) >= 2:
+                    code = precip_hits[0]
+                else:
+                    code = midday_code_by_day.get(day_key, daily_code)
                 forecast.append({
                     'day': day_name,
                     'high': round(daily['temperature_2m_max'][i]),
@@ -5643,16 +5702,41 @@ class IslamicBackground:
         except:
             pass
 
+    def _weather_has_active_rain(self):
+        """Return True when current or forecast cards include rain/thunder icons."""
+        if not self.show_weather or not self.weather_data:
+            return False
+
+        icons = [self.weather_data.get('current_icon', '')]
+        forecast = self.weather_data.get('forecast', [])
+        for day in forecast[:2]:
+            icons.append(day.get('icon', ''))
+
+        return any(icon in ('🌧', '⛈') for icon in icons)
+
+    def _schedule_weather_animation(self):
+        """Drive smooth weather animation independently from 1-second clock updates."""
+        try:
+            if self._weather_has_active_rain() and not self.iqamah_overlay_visible and not self._np_anim_active:
+                self.redraw_full_display()
+                delay = self._weather_anim_interval_ms
+            else:
+                delay = 350
+
+            self._weather_anim_after_id = self.root.after(delay, self._schedule_weather_animation)
+        except:
+            pass
+
     def draw_weather(self, width, height):
         """Draw weather as 3 compact horizontal cards under current time."""
         if not self.weather_data:
             return
 
-        card_h = self.us(86, 46)
-        card_w = self.us(210, 118)
-        card_gap = self.us(10, 6)
-        padding_x = self.us(12, 7)
-        corner_r = self.us(12, 6)
+        card_h = self.us(118, 62)
+        card_w = self.us(272, 150)
+        card_gap = self.us(12, 7)
+        padding_x = self.us(16, 9)
+        corner_r = self.us(14, 8)
         weather_y_offset = -self.us(10, 6)
 
         # Icon color mapping
@@ -5664,6 +5748,16 @@ class IslamicBackground:
             '🌧': '#6CB4EE',   # light blue / rain
             '❄': '#E0FFFF',    # ice blue / snow
             '⛈': '#DA70D6',   # orchid / thunderstorm
+        }
+
+        card_bg_by_icon = {
+            '☀': (78, 58, 6),
+            '⛅': (74, 48, 12),
+            '☁': (28, 40, 62),
+            '🌫': (48, 48, 48),
+            '🌧': (10, 58, 98),
+            '❄': (18, 72, 88),
+            '⛈': (58, 26, 82),
         }
 
         # Build card data: (label, icon, temp_text)
@@ -5697,7 +5791,31 @@ class IslamicBackground:
             max_x = right_area_x1 + right_area_w - total_w - self.us(4, 2)
             x_start = max(min_x, min(max_x, x_start))
         else:
-            x_start = width - total_w - self.us(20, 10)
+            aligned_right = None
+            if self.current_time_text_id:
+                try:
+                    time_bbox = self.canvas.bbox(self.current_time_text_id)
+                    if time_bbox and len(time_bbox) >= 4:
+                        aligned_right = time_bbox[2]
+                except Exception:
+                    aligned_right = None
+
+            if aligned_right is None and self.current_time_outline_ids:
+                try:
+                    outline_right_edges = []
+                    for oid in self.current_time_outline_ids:
+                        ob = self.canvas.bbox(oid)
+                        if ob and len(ob) >= 4:
+                            outline_right_edges.append(ob[2])
+                    if outline_right_edges:
+                        aligned_right = max(outline_right_edges)
+                except Exception:
+                    aligned_right = None
+
+            if aligned_right is not None:
+                x_start = aligned_right - total_w
+            else:
+                x_start = width - total_w - self.us(20, 10)
             y_start = height - card_h - self.us(45, 22) + weather_y_offset
 
         # Keep references to prevent garbage collection
@@ -5705,9 +5823,9 @@ class IslamicBackground:
             self._weather_row_images = []
         self._weather_row_images.clear()
 
-        label_font = self.fs(20, 11)
-        icon_font = self.fs(24, 12)
-        temp_font = self.fs(34, 18)
+        label_font = self.fs(26, 14)
+        icon_font = self.fs(32, 17)
+        temp_font = self.fs(44, 24)
         label_font_spec = ('Arial', label_font, 'bold')
         temp_color_now = '#ffffff'
         temp_color_forecast = '#ffffff'
@@ -5720,12 +5838,73 @@ class IslamicBackground:
                 bg_img = Image.new('RGBA', (card_w, card_h), (0, 0, 0, 0))
                 draw = ImageDraw.Draw(bg_img)
                 r = corner_r
-                # "Now" card slightly brighter, forecast cards darker
-                bg_color = (20, 40, 70, 190) if i == 0 else (10, 20, 40, 175)
+                # Match each card background to its weather condition.
+                base_rgb = card_bg_by_icon.get(icon, (20, 40, 70))
+                alpha = 195 if i == 0 else 178
+                bg_color = (base_rgb[0], base_rgb[1], base_rgb[2], alpha)
                 draw.rounded_rectangle(
                     [(0, 0), (card_w - 1, card_h - 1)],
                     radius=r, fill=bg_color
                 )
+
+                # Add visible weather effects so each card reads instantly.
+                if icon in ('🌧', '⛈'):
+                    rain_step_x = self.us(24, 13)
+                    rain_step_y = self.us(34, 18)
+                    drop_len = self.us(12, 7)
+                    drop_slant = self.us(4, 2)
+                    rain_top = self.us(34, 20)
+                    rain_bottom = card_h - self.us(10, 6)
+                    rain_height = max(1, rain_bottom - rain_top)
+                    phase = int((time.time() * 70) % rain_height)
+
+                    for lane_x in range(-self.us(20, 12), card_w + self.us(20, 12), rain_step_x):
+                        lane_offset = (lane_x * 7) % rain_height
+                        y = rain_top + ((phase + lane_offset) % rain_height)
+                        while y > rain_top:
+                            y0 = y
+                            y1 = max(rain_top, y - drop_len)
+                            x0 = lane_x
+                            x1 = lane_x - drop_slant
+                            tip_r = max(1, self.us(2, 1))
+
+                            # Teardrop look: bright rounded head + trailing tail.
+                            draw.ellipse(
+                                [(x0 - tip_r, y0 - tip_r), (x0 + tip_r, y0 + tip_r)],
+                                fill=(196, 238, 255, 240)
+                            )
+                            draw.line(
+                                [(x0, y0), (x1, y1)],
+                                fill=(170, 230, 255, 225),
+                                width=max(1, self.us(2, 1))
+                            )
+                            y -= rain_step_y
+                elif icon == '❄':
+                    flake_step = self.us(28, 16)
+                    for sx in range(self.us(16, 9), card_w - self.us(18, 10), flake_step):
+                        for sy in range(self.us(46, 26), card_h - self.us(14, 8), self.us(24, 14)):
+                            rr = max(1, self.us(3, 2))
+                            draw.ellipse(
+                                [(sx - rr, sy - rr), (sx + rr, sy + rr)],
+                                fill=(240, 252, 255, 230)
+                            )
+                elif icon in ('☀', '⛅'):
+                    sun_cx = card_w - self.us(42, 24)
+                    sun_cy = self.us(30, 17)
+                    sun_r = self.us(16, 9)
+                    draw.ellipse(
+                        [(sun_cx - sun_r, sun_cy - sun_r), (sun_cx + sun_r, sun_cy + sun_r)],
+                        fill=(255, 214, 64, 220)
+                    )
+                    for ray in range(0, 360, 45):
+                        a = math.radians(ray)
+                        r0 = sun_r + self.us(4, 2)
+                        r1 = sun_r + self.us(10, 6)
+                        x0 = sun_cx + math.cos(a) * r0
+                        y0 = sun_cy + math.sin(a) * r0
+                        x1 = sun_cx + math.cos(a) * r1
+                        y1 = sun_cy + math.sin(a) * r1
+                        draw.line([(x0, y0), (x1, y1)], fill=(255, 224, 110, 215), width=max(1, self.us(2, 1)))
                 tk_img = ImageTk.PhotoImage(bg_img)
                 self._weather_row_images.append(tk_img)
                 self.canvas.create_image(
@@ -5737,7 +5916,7 @@ class IslamicBackground:
 
             # Label near top-left
             self.canvas.create_text(
-                rx + padding_x, y_start + self.us(16, 9),
+                rx + padding_x, y_start + self.us(22, 12),
                 text=label,
                 font=label_font_spec,
                 fill='#ffffff',
@@ -5749,7 +5928,7 @@ class IslamicBackground:
             icon_color = icon_colors.get(icon, '#ffffff')
             label_w = tkfont.Font(font=label_font_spec).measure(f"{label} ")
             self.canvas.create_text(
-                rx + padding_x + label_w, y_start + self.us(16, 9),
+                rx + padding_x + label_w, y_start + self.us(22, 12),
                 text=icon,
                 font=('Segoe UI Emoji', icon_font),
                 fill=icon_color,
@@ -5759,7 +5938,7 @@ class IslamicBackground:
 
             # Temperature on right side
             self.canvas.create_text(
-                rx + card_w - padding_x, y_start + card_h - self.us(24, 12),
+                rx + card_w - padding_x, y_start + card_h - self.us(30, 16),
                 text=temp_text,
                 font=('Arial', temp_font, 'bold'),
                 fill=temp_color_now if i == 0 else temp_color_forecast,
@@ -5867,10 +6046,6 @@ class IslamicBackground:
         # Draw Quranic verse above prayer times
         self.draw_quran_verse(width, height)
 
-        # Draw weather in top-left corner
-        if self.show_weather and self.weather_data:
-            self.draw_weather(width, height)
-        
         # Define prayers to display
         prayers = [
             ('Fajr', 'Fajr', 'الفجر'),
@@ -5893,6 +6068,8 @@ class IslamicBackground:
         theme_name = self.get_theme_name()
         if theme_name == 'elegent_v2':
             self.draw_elegent_v2_left_prayer_table(width, height, prayers_data, prayers_with_shrouq_jummah, current_prayer)
+            if self.show_weather and self.weather_data:
+                self.draw_weather(width, height)
             self.draw_top_right_logo(width, height)
             if self.is_eid_day(self.get_current_date()):
                 self.canvas.delete('animated_eid')
@@ -5904,6 +6081,8 @@ class IslamicBackground:
 
         if theme_name == 'elegent':
             self.draw_elegent_compact_prayer_table(width, height, prayers_data, prayers_with_shrouq, current_prayer)
+            if self.show_weather and self.weather_data:
+                self.draw_weather(width, height)
             self.draw_build_info(width, height)
             return
         
@@ -6059,6 +6238,9 @@ class IslamicBackground:
             current_time_y = self.us(220, 145)
 
             self.draw_current_time_display(current_time_x, current_time_y, next_prayer_name_for_display)
+
+        if self.show_weather and self.weather_data:
+            self.draw_weather(width, height)
 
         # Draw logo after ribbons so it appears on top
         self.draw_top_right_logo(width, height)
