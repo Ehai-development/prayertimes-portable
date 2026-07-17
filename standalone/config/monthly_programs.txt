@@ -1,0 +1,9 @@
+MONTHLY PROGRAM SCHEDULE
+
+Format: Program Name | Days | Start Time - End Time | Start Date - End Date
+
+Quran Halaqah | Monday, Thursday | 19:00 - 20:30 | 01-01 - 02-28
+Iqraa School | Monday, Thursday | 18:30 - 19:30 | 01-01 - 02-28
+Youth Activity | Saturday | 15:00 - 16:30 | 01-15 - 02-15 color red
+Sisters Gathering | Saturday | 10:00 - 11:30 | 01-01 - 02-28
+Children Class | Thursday | 17:00 - 18:00 | 01-08 - 02-26

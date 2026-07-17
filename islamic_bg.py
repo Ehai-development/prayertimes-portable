@@ -228,7 +228,7 @@ class IslamicBackground:
         self.iqamah_overlay_ids = []  # List of canvas IDs for overlay elements
         self.current_prayer_iqamah_time = None
         self.current_prayer_name = None
-        self.iqamah_overlay_mode = None  # 'countdown' or 'post'
+        self.iqamah_overlay_mode = None  # 'countdown', 'post', or 'khutbah'
         self.iqamah_post_duration_seconds = 180
         self.iqamah_overlay_cooldown_until = None
         self.iqamah_overlay_last_update = 0  # Timestamp to prevent rapid updates
@@ -673,6 +673,8 @@ class IslamicBackground:
                 self.iqamah_overlay_ids = []
                 if overlay_mode == 'post':
                     self.show_post_iqamah_overlay()
+                elif overlay_mode == 'khutbah':
+                    self.show_khutbah_overlay()
                 else:
                     self.show_iqamah_overlay()
         finally:
@@ -1809,6 +1811,7 @@ class IslamicBackground:
         self.config['redribbonhide'] = red_ribbon_hide_seconds
         self.red_ribbon_show_seconds = red_ribbon_show_seconds
         self.red_ribbon_hide_seconds = red_ribbon_hide_seconds
+        self.config['khutbahoverlayendsat'] = str(self.config.get('khutbahoverlayendsat', '2:00 PM') or '2:00 PM').strip()
 
         # Show logs (console print output) - default No
         showlogs_val = str(self.config.get('showlogs', 'no')).strip().lower()
@@ -4076,6 +4079,7 @@ class IslamicBackground:
             mocked_date = self.get_current_date()
             now_dt = datetime.combine(mocked_date, current_time)
             friday_duhr_start = self.parse_time('2:15 PM') if is_friday else None
+            khutbah_overlay_end_time = self.parse_time(self.config.get('khutbahoverlayendsat', '2:00 PM')) if is_friday else None
 
             # After post-iqamah phase ends, keep app on main page for a short cooldown
             if self.iqamah_overlay_cooldown_until and now_dt < self.iqamah_overlay_cooldown_until:
@@ -4131,6 +4135,22 @@ class IslamicBackground:
                 if iqamah_dt <= now_dt < post_end_dt and post_iqamah_prayer is None:
                     post_iqamah_prayer = display_prayer
                     post_iqamah_time = iqamah_time
+
+            if is_friday:
+                jummah_start_time = self.jummah_time or self.parse_time('1:30 PM')
+                if jummah_start_time and khutbah_overlay_end_time:
+                    jummah_start_dt = datetime.combine(mocked_date, jummah_start_time)
+                    khutbah_end_dt = datetime.combine(mocked_date, khutbah_overlay_end_time)
+                    if jummah_start_dt <= now_dt < khutbah_end_dt:
+                        self.current_prayer_name = 'Jummah'
+                        self.current_prayer_iqamah_time = jummah_start_time
+                        if (not self.iqamah_overlay_visible) or self.iqamah_overlay_mode != 'khutbah':
+                            self.iqamah_overlay_ids = []
+                            self.show_khutbah_overlay()
+                        else:
+                            self.update_iqamah_overlay_countdown()
+                        self.root.after(1000, self.check_iqamah_countdown)
+                        return
 
             if pre_countdown_prayer:
                 self.current_prayer_name = pre_countdown_prayer
@@ -4620,6 +4640,113 @@ class IslamicBackground:
 
         except Exception as e:
             self._log(f"ERROR in show_post_iqamah_overlay: {e}")
+            import traceback
+            if getattr(self, 'show_logs', False): traceback.print_exc()
+
+    def show_khutbah_overlay(self):
+        """Show Friday khutbah-in-progress overlay from Jummah start until configured end time."""
+        try:
+            try:
+                self.canvas.itemconfig('prayer_change_ribbon', state='hidden')
+            except:
+                pass
+
+            self.clear_iqamah_overlay_items()
+            width = self.canvas.winfo_width()
+            height = self.canvas.winfo_height()
+
+            overlay_bg = self.canvas.create_rectangle(
+                0, 0, width, height,
+                fill='#f7f5ef',
+                outline=''
+                ,tags='iqamah_overlay'
+            )
+            self.iqamah_overlay_ids.append(overlay_bg)
+
+            current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
+            time_font = ('Arial', self.fs(50, 24), 'bold')
+            time_pad_x = self.us(20, 10)
+            time_pad_y = self.us(10, 5)
+            time_radius = self.us(20, 10)
+            import tkinter.font as _tf
+            _tw = _tf.Font(font=time_font).measure(current_time_text)
+            _th = _tf.Font(font=time_font).metrics('linespace')
+            time_bg_x = self.us(20, 10)
+            time_bg_y = height - self.us(20, 10) - _th - time_pad_y * 2
+            time_bg_id = self.draw_rounded_rectangle(
+                time_bg_x, time_bg_y,
+                _tw + time_pad_x * 2, _th + time_pad_y * 2,
+                time_radius,
+                fill='white', outline='#cccccc', outline_width=1,
+                tags=('iqamah_overlay', 'iqamah_overlay_time_bg')
+            )
+            self.iqamah_overlay_ids.append(time_bg_id)
+            top_left_time = self.canvas.create_text(
+                time_bg_x + time_pad_x, time_bg_y + time_pad_y,
+                text=current_time_text,
+                font=time_font,
+                fill='#1a3a5f',
+                anchor='nw',
+                tags=('iqamah_overlay', 'iqamah_overlay_current_time')
+            )
+            self.iqamah_overlay_ids.append(top_left_time)
+
+            heading_y = height * 0.22
+            arabic_heading_y = heading_y + self.us(142, 78)
+            warning_y = arabic_heading_y + self.us(150, 82)
+            arabic_warning_y = warning_y + self.us(92, 48)
+            icon_y = arabic_warning_y + self.us(190, 104)
+
+            heading_id = self.draw_outlined_text(
+                width / 2, heading_y,
+                text='Khutbah is in progress',
+                font=('Arial', self.fs(96, 44), 'bold'),
+                fill='#d32f2f',
+                outline='white',
+                outline_px=self.us(3, 2),
+                tags=('iqamah_overlay', 'khutbah_progress_heading')
+            )
+            self.iqamah_overlay_ids.append(heading_id)
+
+            arabic_heading_id = self.draw_outlined_text(
+                width / 2, arabic_heading_y,
+                text='الخطبة جارية الآن',
+                font=('Arial', self.fs(86, 40), 'bold'),
+                fill='#2E7D32',
+                outline='white',
+                outline_px=self.us(3, 2),
+                tags=('iqamah_overlay', 'khutbah_progress_heading_ar')
+            )
+            self.iqamah_overlay_ids.append(arabic_heading_id)
+
+            warning_id = self.canvas.create_text(
+                width / 2, warning_y,
+                text='Talking is forbidden',
+                font=('Arial', self.fs(72, 34), 'bold'),
+                fill='black',
+                anchor='center',
+                tags=('iqamah_overlay', 'khutbah_warning_text')
+            )
+            self.iqamah_overlay_ids.append(warning_id)
+
+            arabic_warning_id = self.canvas.create_text(
+                width / 2, arabic_warning_y,
+                text='الكلام محرم اثناء الخطبتين',
+                font=('Arial', self.fs(66, 32), 'bold'),
+                fill='black',
+                anchor='center',
+                tags=('iqamah_overlay', 'khutbah_warning_text_ar')
+            )
+            self.iqamah_overlay_ids.append(arabic_warning_id)
+
+            icon_ids = self.draw_no_phone_icon(width / 2, icon_y, size=self.us(240, 130), tags='iqamah_overlay')
+            self.iqamah_overlay_ids.extend(icon_ids)
+
+            self.canvas.tag_raise('iqamah_overlay')
+            self.iqamah_overlay_visible = True
+            self.iqamah_overlay_mode = 'khutbah'
+        except Exception as e:
+            self._log(f"ERROR in show_khutbah_overlay: {e}")
             import traceback
             if getattr(self, 'show_logs', False): traceback.print_exc()
 
@@ -5132,6 +5259,17 @@ class IslamicBackground:
     def update_iqamah_overlay_countdown(self):
         """Update the countdown text on the overlay"""
         try:
+            if self.iqamah_overlay_mode == 'khutbah':
+                time_items = self.canvas.find_withtag('iqamah_overlay_current_time')
+                if time_items:
+                    new_time = self.get_current_time().strftime('%I:%M:%S %p')
+                    self.canvas.itemconfig(time_items[0], text=new_time)
+                bg_items = self.canvas.find_withtag('iqamah_overlay_time_bg')
+                if bg_items:
+                    self.canvas.tag_raise('iqamah_overlay_time_bg')
+                    self.canvas.tag_raise('iqamah_overlay_current_time')
+                return
+
             countdown = self.get_iqamah_countdown()
 
             # Hard transition: never remain on countdown overlay at 00:00
@@ -5384,7 +5522,7 @@ class IslamicBackground:
                 scaled_logo_x_offset = int(round(logo_x_offset * self.ui_scale))
 
                 logo_center_x = (image_w / 2) + scaled_logo_x_offset
-                logo_center_y = height + self.us(90) - (image_h / 2)
+                logo_center_y = height + self.us(116) - (image_h / 2)
 
                 self.canvas.create_image(
                     logo_center_x,
@@ -6211,7 +6349,7 @@ class IslamicBackground:
                 announcement_ribbon_height = self.us(86, 52)
                 yellow_ribbon_height = self.us(70, 40)
                 ribbon_gap = self.us(5, 3)
-                announcement_ribbon_y = height - self.us(128, 80)
+                announcement_ribbon_y = height - self.us(92, 56)
 
                 # Draw yellow ribbon above the announcement ribbon if there are upcoming changes.
                 if has_upcoming_changes:
@@ -6785,7 +6923,7 @@ class IslamicBackground:
         announcement_ribbon_height = self.us(86, 52)
         yellow_ribbon_height = self.us(70, 40)
         ribbon_gap = self.us(5, 3)
-        announcement_ribbon_y = height - self.us(128, 80)
+        announcement_ribbon_y = height - self.us(92, 56)
 
         if has_upcoming_changes:
             yellow_ribbon_y = announcement_ribbon_y - yellow_ribbon_height - ribbon_gap
@@ -7860,8 +7998,7 @@ class IslamicBackground:
 
     def draw_arafah_takbeer_panel(self, right_area_x1, right_area_w):
         """Draw a dedicated Takbeer panel below weather cards on elegent_v2."""
-        if not self._should_draw_arafah_takbeer_panel():
-            return
+        return
 
         palette = self.get_theme_palette()
         width = max(1, self.canvas.winfo_width())
