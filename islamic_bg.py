@@ -14,7 +14,7 @@ import re
 import sys
 import socket
 import time
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from PIL import Image, ImageTk, ImageDraw, ImageOps
 import urllib.request
@@ -278,6 +278,8 @@ class IslamicBackground:
         
         # Tracking for prayer time changes (tomorrow vs today)
         self.changing_prayers = {}  # {prayer_name: {today: time, tomorrow: time}}
+        self._islamic_events_cache_date = None
+        self._islamic_events_cache = []
         self.announcement_scroll_complete = False
         
         # Red ribbon visibility cycle (15 sec ON, 15 sec OFF)
@@ -3367,12 +3369,12 @@ class IslamicBackground:
         return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
     def get_next_line_display_data(self, prayers_data, force_show_arabic=None):
-        """Return dynamic label/name/countdown for next-prayer line.
+        """Return dynamic label/name/countdown for the prayer-time box.
 
         During the window between a prayer's Athan and Iqama, show:
         <PRAYER> IQAMAH IN <countdown to iqama>
         Otherwise show:
-        NEXT PRAYER: <PRAYER> IN <countdown to athan>
+        NEXT IQAMAH: <PRAYER> IN <countdown to iqamah>
         """
         try:
             now = self.get_current_time()
@@ -3434,21 +3436,49 @@ class IslamicBackground:
                         'rtl': rtl_mode
                     }
 
-            next_prayer_name, next_athan = self.get_next_prayer(prayers_data)
-            self.next_prayer_athan_time = next_athan
-            if is_friday and next_prayer_name == 'Jummah':
+            if is_friday:
+                next_iqamah_schedule = [
+                    ('Fajr', self.parse_time(prayers_data.get('FajrIqama', ''))),
+                    ('Jummah', self.jummah_time or self.parse_time('1:30 PM')),
+                    ('Asr', self.parse_time(prayers_data.get('AsrIqama', ''))),
+                    ('Maghrib', self.parse_time(prayers_data.get('MaghribIqama', ''))),
+                    ('Isha', self.parse_time(prayers_data.get('IshaIqama', ''))),
+                ]
+            else:
+                next_iqamah_schedule = [
+                    ('Fajr', self.parse_time(prayers_data.get('FajrIqama', ''))),
+                    ('Duhr', self.parse_time(prayers_data.get('DuhrIqama', ''))),
+                    ('Asr', self.parse_time(prayers_data.get('AsrIqama', ''))),
+                    ('Maghrib', self.parse_time(prayers_data.get('MaghribIqama', ''))),
+                    ('Isha', self.parse_time(prayers_data.get('IshaIqama', ''))),
+                ]
+
+            next_iqamah_name = None
+            next_iqamah_time = None
+            for prayer_name, iqamah_time in next_iqamah_schedule:
+                if iqamah_time and now < iqamah_time:
+                    next_iqamah_name = prayer_name
+                    next_iqamah_time = iqamah_time
+                    break
+
+            if next_iqamah_name is None:
+                next_iqamah_name = 'Fajr'
+                next_iqamah_time = self.parse_time(prayers_data.get('FajrIqama', ''))
+
+            self.next_prayer_athan_time = next_iqamah_time
+            if is_friday and next_iqamah_name == 'Jummah':
                 return {
                     'prefix_text': '',
                     'name_text': localized_phrase('Jummah khutbah', 'خطبة الجمعة'),
                     'in_text': localized_phrase(' in ', ' خلال '),
-                    'countdown_text': self.get_countdown(next_athan),
+                    'countdown_text': self.get_countdown(next_iqamah_time),
                     'rtl': rtl_mode
                 }
             return {
-                'prefix_text': localized_phrase('Next prayer: ', 'الصلاة القادمة \u200f:\u200f '),
-                'name_text': localized_prayer_name(next_prayer_name),
+                'prefix_text': localized_phrase('Next iqamah: ', 'الإقامة القادمة \u200f:\u200f '),
+                'name_text': localized_prayer_name(next_iqamah_name),
                 'in_text': localized_phrase(' in ', ' خلال '),
-                'countdown_text': self.get_countdown(next_athan),
+                'countdown_text': self.get_countdown(next_iqamah_time),
                 'rtl': rtl_mode
             }
         except:
@@ -3457,7 +3487,7 @@ class IslamicBackground:
             else:
                 show_arabic = bool(force_show_arabic)
             return {
-                'prefix_text': 'الصلاة القادمة \u200f:\u200f ' if show_arabic else 'Next prayer: ',
+                'prefix_text': 'الإقامة القادمة \u200f:\u200f ' if show_arabic else 'Next iqamah: ',
                 'name_text': '---',
                 'in_text': ' خلال ' if show_arabic else ' in ',
                 'countdown_text': '--:--:--',
@@ -6754,61 +6784,76 @@ class IslamicBackground:
                     )
                 else:
                     prefix_text = f'{display_name} Iqamah changes to '
+                    time_text = tomorrow_iqamah_overlay
                     suffix_text = ' Tomorrow'
-                    new_time_text = tomorrow_iqamah_overlay
-                max_text_width = max(self.us(420, 220), notice_w - self.us(44, 24))
-                overlay_font_size = self.fs(36, 19)
-                min_overlay_font_size = self.fs(22, 12)
 
-                while True:
-                    overlay_font = (ui_family, overlay_font_size, 'bold')
-                    overlay_font_obj = tkfont.Font(font=overlay_font)
-                    if show_arabic_name:
-                        total_w = overlay_font_obj.measure(full_overlay_text)
-                    else:
-                        prefix_w = overlay_font_obj.measure(prefix_text)
-                        new_time_w = overlay_font_obj.measure(new_time_text)
-                        suffix_w = overlay_font_obj.measure(suffix_text)
-                        total_w = prefix_w + new_time_w + suffix_w
-                    if total_w <= max_text_width or overlay_font_size <= min_overlay_font_size:
-                        break
-                    overlay_font_size -= 1
+                max_text_width = max(self.us(420, 220), notice_w - self.us(40, 20))
+                max_text_height = max(self.us(78, 42), notice_h - self.us(22, 12))
 
                 if show_arabic_name:
-                    right_x = notice_x + notice_w - self.us(22, 12)
+                    overlay_font_size = self.fs(52, 28)
+                    min_overlay_font_size = self.fs(30, 16)
+                    while True:
+                        overlay_font = (ui_family, overlay_font_size, 'bold')
+                        overlay_font_obj = tkfont.Font(font=overlay_font)
+                        total_w = overlay_font_obj.measure(full_overlay_text)
+                        total_h = overlay_font_obj.metrics('linespace')
+                        if (total_w <= max_text_width and total_h <= max_text_height) or overlay_font_size <= min_overlay_font_size:
+                            break
+                        overlay_font_size -= 1
+
                     self.canvas.create_text(
-                        right_x,
+                        overlay_center_x,
                         overlay_center_y,
                         text=full_overlay_text,
                         font=overlay_font,
                         fill='black',
-                        anchor='e',
+                        anchor='center',
                         tags=('prayer_change_ribbon',),
                         state=ribbon_state
                     )
                 else:
-                    prefix_text = f'{display_name} Iqamah changes to '
-                    suffix_text = ' Tomorrow'
-                    one_line_font_size = self.fs(34, 19)
-                    min_one_line_font_size = self.fs(20, 11)
+                    prefix_size = self.fs(48, 25)
+                    time_size = self.fs(68, 35)
+                    suffix_size = self.fs(56, 29)
+                    min_prefix_size = self.fs(24, 13)
+                    min_time_size = self.fs(34, 18)
+                    min_suffix_size = self.fs(28, 15)
 
                     while True:
-                        one_line_font = (ui_family, one_line_font_size, 'bold')
-                        one_line_font_obj = tkfont.Font(font=one_line_font)
-                        prefix_w = one_line_font_obj.measure(prefix_text)
-                        new_time_w = one_line_font_obj.measure(new_time_text)
-                        suffix_w = one_line_font_obj.measure(suffix_text)
-                        total_w = prefix_w + new_time_w + suffix_w
-                        if total_w <= max_text_width or one_line_font_size <= min_one_line_font_size:
+                        prefix_font = (ui_family, prefix_size, 'bold')
+                        time_font = (ui_family, time_size, 'bold')
+                        suffix_font = (ui_family, suffix_size, 'bold')
+
+                        prefix_obj = tkfont.Font(font=prefix_font)
+                        time_obj = tkfont.Font(font=time_font)
+                        suffix_obj = tkfont.Font(font=suffix_font)
+
+                        prefix_w = prefix_obj.measure(prefix_text)
+                        time_w = time_obj.measure(time_text)
+                        suffix_w = suffix_obj.measure(suffix_text)
+                        total_w = prefix_w + time_w + suffix_w
+                        total_h = max(prefix_obj.metrics('linespace'), time_obj.metrics('linespace'), suffix_obj.metrics('linespace'))
+
+                        if (total_w <= max_text_width and total_h <= max_text_height) or (prefix_size <= min_prefix_size or time_size <= min_time_size or suffix_size <= min_suffix_size):
                             break
-                        one_line_font_size -= 1
+
+                        if total_w > max_text_width:
+                            prefix_size -= 1
+                            time_size -= 1
+                            suffix_size -= 1
+                        if total_h > max_text_height:
+                            prefix_size -= 1
+                            time_size -= 1
+                            suffix_size -= 1
 
                     start_x = overlay_center_x - (total_w / 2)
+
                     self.canvas.create_text(
                         start_x,
                         overlay_center_y,
                         text=prefix_text,
-                        font=one_line_font,
+                        font=prefix_font,
                         fill='black',
                         anchor='w',
                         tags=('prayer_change_ribbon',),
@@ -6817,18 +6862,18 @@ class IslamicBackground:
                     self.canvas.create_text(
                         start_x + prefix_w,
                         overlay_center_y,
-                        text=new_time_text,
-                        font=one_line_font,
+                        text=time_text,
+                        font=time_font,
                         fill='#c62828',
                         anchor='w',
                         tags=('prayer_change_ribbon',),
                         state=ribbon_state
                     )
                     self.canvas.create_text(
-                        start_x + prefix_w + new_time_w,
+                        start_x + prefix_w + time_w,
                         overlay_center_y,
                         text=suffix_text,
-                        font=one_line_font,
+                        font=suffix_font,
                         fill='#2e7d32',
                         anchor='w',
                         tags=('prayer_change_ribbon',),
@@ -7252,27 +7297,76 @@ class IslamicBackground:
             self.canvas.itemconfigure(notice_bg, state=ribbon_state, tags=('prayer_change_ribbon', 'prayer_change_ribbon_bg'))
 
             center_x = x + (width / 2)
-            line1_y = y + (height * 0.18)
-            iqamah_label_y = y + (height * 0.36)
-            line2_y = y + (height * 0.56)
-            line3_y = y + (height * 0.82)
+            main_time_text = (tomorrow_iqamah or '--').strip()
+            suffix_time_text = ''
+            split_time = main_time_text.rsplit(' ', 1)
+            if len(split_time) == 2 and split_time[1].upper() in ('AM', 'PM', 'MIN'):
+                main_time_text = split_time[0]
+                suffix_time_text = f" {split_time[1].upper()}"
+
+            # 3-line layout optimized for very large time visibility inside the prayer box.
+            heading_text = name.upper()
+            base_name_size = self.fs(82, 41)
+            base_time_main_size = self.fs(178, 88)
+            base_time_suffix_size = self.fs(72, 36)
+            base_tomorrow_size = self.fs(56, 28)
+            max_text_width = notice_w * 0.95
+            max_text_height = notice_h * 0.95
+            size_scale = 1.80
+
+            name_size = base_name_size
+            time_main_size = base_time_main_size
+            time_suffix_size = base_time_suffix_size
+            tomorrow_size = base_tomorrow_size
+            name_h = time_h = tomorrow_h = 0
+            gap = self.us(16, 8)
+
+            while size_scale >= 0.95:
+                name_size = max(self.fs(48, 24), int(round(base_name_size * size_scale)))
+                time_main_size = max(self.fs(92, 48), int(round(base_time_main_size * size_scale)))
+                time_suffix_size = max(self.fs(38, 19), int(round(base_time_suffix_size * size_scale)))
+                tomorrow_size = max(self.fs(34, 17), int(round(base_tomorrow_size * size_scale)))
+
+                name_font = (self.ui_font_family, name_size, 'bold')
+                time_main_font = (self.ui_font_family, time_main_size, 'bold')
+                time_suffix_font = (self.ui_font_family, time_suffix_size, 'bold')
+                tomorrow_font = (self.ui_font_family, tomorrow_size, 'bold')
+
+                name_font_obj = tkfont.Font(font=name_font)
+                time_main_font_obj = tkfont.Font(font=time_main_font)
+                time_suffix_font_obj = tkfont.Font(font=time_suffix_font)
+                tomorrow_font_obj = tkfont.Font(font=tomorrow_font)
+
+                name_w = name_font_obj.measure(heading_text)
+                time_w = time_main_font_obj.measure(main_time_text)
+                if suffix_time_text:
+                    time_w += time_suffix_font_obj.measure(suffix_time_text)
+                tomorrow_w = tomorrow_font_obj.measure('TOMORROW')
+                max_line_width = max(name_w, time_w, tomorrow_w)
+
+                name_h = name_font_obj.metrics('linespace')
+                time_h = max(time_main_font_obj.metrics('linespace'), time_suffix_font_obj.metrics('linespace'))
+                tomorrow_h = tomorrow_font_obj.metrics('linespace')
+                gap = max(self.us(18, 9), int(round(time_h * 0.16)))
+                total_h = name_h + time_h + tomorrow_h + (gap * 2)
+
+                if max_line_width <= max_text_width and total_h <= max_text_height:
+                    break
+
+                size_scale -= 0.03
+
+            total_h = name_h + time_h + tomorrow_h + (gap * 2)
+            content_top_y = y + max(self.us(10, 5), (height - total_h) / 2)
+            line1_y = content_top_y + (name_h / 2)
+            line2_y = line1_y + (name_h / 2) + gap + (time_h / 2)
+            line3_y = line2_y + (time_h / 2) + gap + (tomorrow_h / 2)
 
             # Line 1: Prayer name
             self.canvas.create_text(
                 center_x, line1_y,
-                text=name.upper(),
-                font=('Arial', self.fs(66, 33), 'bold'),
+                text=heading_text,
+                font=(self.ui_font_family, name_size, 'bold'),
                 fill='black',
-                tags=('prayer_change_ribbon',),
-                state=ribbon_state
-            )
-
-            # Line 1b: "Iqamah" label
-            self.canvas.create_text(
-                center_x, iqamah_label_y,
-                text='Iqamah',
-                font=('Arial', self.fs(54, 27), 'bold'),
-                fill='#2E7D32',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
             )
@@ -7281,8 +7375,8 @@ class IslamicBackground:
             self.draw_time_text_with_meridiem(
                 center_x, line2_y,
                 tomorrow_iqamah,
-                main_size=self.fs(78, 39),
-                suffix_size=self.fs(34, 17),
+                main_size=time_main_size,
+                suffix_size=time_suffix_size,
                 color='#ff0000',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
@@ -7292,7 +7386,7 @@ class IslamicBackground:
             self.canvas.create_text(
                 center_x, line3_y,
                 text='TOMORROW',
-                font=('Arial', self.fs(50, 25), 'bold'),
+                font=(self.ui_font_family, tomorrow_size, 'bold'),
                 fill='#ff0000',
                 tags=('prayer_change_ribbon',),
                 state=ribbon_state
