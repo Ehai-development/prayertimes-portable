@@ -243,6 +243,8 @@ class IslamicBackground:
         self.post_overlay_transition_duration_ms = 860
         self.post_overlay_transition_tick_ms = 20
         self.post_overlay_transition_travel = self.us(12, 6)
+        self.iqamah_change_label_every_seconds = 30
+        self.iqamah_change_label_duration_seconds = 10
         
         # Tracking for announcement ticker - initialize empty
         self.announcement_text_id = None
@@ -1781,6 +1783,22 @@ class IslamicBackground:
         arabic_name_duration_seconds = min(arabic_name_duration_seconds, arabic_change_every_seconds)
         self.config['arabicnameduration'] = arabic_name_duration_seconds
 
+        try:
+            iqamah_change_label_every_seconds = int(self.config.get('iqamahchangelabel', 30))
+            iqamah_change_label_every_seconds = max(1, iqamah_change_label_every_seconds)
+        except:
+            iqamah_change_label_every_seconds = 30
+        try:
+            iqamah_change_label_duration_seconds = int(self.config.get('iqamahchangelabelduration', 10))
+            iqamah_change_label_duration_seconds = max(0, iqamah_change_label_duration_seconds)
+        except:
+            iqamah_change_label_duration_seconds = 10
+        iqamah_change_label_duration_seconds = min(iqamah_change_label_duration_seconds, iqamah_change_label_every_seconds)
+        self.config['iqamahchangelabel'] = iqamah_change_label_every_seconds
+        self.config['iqamahchangelabelduration'] = iqamah_change_label_duration_seconds
+        self.iqamah_change_label_every_seconds = iqamah_change_label_every_seconds
+        self.iqamah_change_label_duration_seconds = iqamah_change_label_duration_seconds
+
         # Shrouq additional minutes label (configurable)
         try:
             shrouq_plus_minutes = int(self.config.get('shrouqplus', 10))
@@ -1857,8 +1875,8 @@ class IslamicBackground:
         # Announcement ribbon background color
         self.announcement_bg_color = str(self.config.get('announcementbgcolor', '#0a1128')).strip()
 
-        # Show weather display - default No
-        showweather_val = str(self.config.get('showweather', 'no')).strip().lower()
+        # Show weather display - default Yes
+        showweather_val = str(self.config.get('showweather', 'yes')).strip().lower()
         self.show_weather = showweather_val in ('yes', 'true', '1')
         
         # Load location/address from address.txt if available
@@ -3216,9 +3234,8 @@ class IslamicBackground:
             if shrouq_end_dt > shrouq_start_dt:
                 shrouq_end_time = shrouq_end_dt.time()
 
-        if shrouq_start_time and shrouq_end_time and shrouq_start_time <= now < shrouq_end_time:
-            return 'Shrouq'
-
+        # Shrouq is a future marker only; once it has already happened, do not keep
+        # showing it as the active prayer period.
         if shrouq_end_time and shrouq_anchor_time and shrouq_end_time <= now < shrouq_anchor_time:
             # Intentionally show no current prayer in this gap before Duhr/Jummah.
             return None
@@ -3431,10 +3448,48 @@ class IslamicBackground:
                     return {
                         'prefix_text': localized_phrase('', 'إقامة '),
                         'name_text': iqamah_name_text,
-                        'in_text': localized_phrase(' iqamah in ', ' خلال '),
+                        'in_text': localized_phrase(' Iqamah in ', ' خلال '),
                         'countdown_text': iqamah_countdown_text,
                         'rtl': rtl_mode
                     }
+
+            _, sunrise_time = self.resolve_sunrise_time(prayers_data)
+            shrouq_plus = max(0, int(self.config.get('shrouqplus', 10)))
+            shrooq_ends_minutes = max(0, int(getattr(self, 'shrooq_ends_minutes', self.config.get('shrooqends', 15))))
+            shrouq_start_time = None
+            if sunrise_time:
+                shrouq_start_time = (datetime.combine(self.get_current_date(), sunrise_time) + timedelta(minutes=shrouq_plus)).time()
+
+            duhr_athan = self.parse_time(prayers_data.get('DuhrAthan', ''))
+            jummah_time = self.jummah_time or self.parse_time('1:30 PM')
+            shrouq_anchor_time = jummah_time if (is_friday and jummah_time) else duhr_athan
+            shrouq_end_time = None
+            if shrouq_start_time and shrouq_anchor_time:
+                shrouq_start_dt = datetime.combine(self.get_current_date(), shrouq_start_time)
+                shrouq_anchor_dt = datetime.combine(self.get_current_date(), shrouq_anchor_time)
+                shrouq_end_dt = shrouq_anchor_dt - timedelta(minutes=shrooq_ends_minutes)
+                if shrouq_end_dt > shrouq_start_dt:
+                    shrouq_end_time = shrouq_end_dt.time()
+
+            if shrouq_start_time and now < shrouq_start_time:
+                return {
+                    'prefix_text': localized_phrase('Next: ', ''),
+                    'name_text': localized_phrase('Shrouq', 'الشروق'),
+                    'in_text': localized_phrase(' in ', ' خلال '),
+                    'countdown_text': self.get_countdown(shrouq_start_time),
+                    'rtl': rtl_mode
+                }
+
+            # Shrouq is only shown as a future countdown before it starts; once it has
+            # already passed, the display should move on to the next prayer or Friday khutbah.
+            if is_friday and jummah_time and shrouq_end_time and shrouq_end_time <= now < jummah_time:
+                return {
+                    'prefix_text': '',
+                    'name_text': localized_phrase('Jummah khutbah', 'خطبة الجمعة'),
+                    'in_text': localized_phrase(' in ', ' خلال '),
+                    'countdown_text': self.get_countdown(jummah_time),
+                    'rtl': rtl_mode
+                }
 
             if is_friday:
                 next_iqamah_schedule = [
@@ -3475,7 +3530,7 @@ class IslamicBackground:
                     'rtl': rtl_mode
                 }
             return {
-                'prefix_text': localized_phrase('Next iqamah: ', 'الإقامة القادمة \u200f:\u200f '),
+                'prefix_text': localized_phrase('Next Iqamah: ', 'الإقامة القادمة \u200f:\u200f '),
                 'name_text': localized_prayer_name(next_iqamah_name),
                 'in_text': localized_phrase(' in ', ' خلال '),
                 'countdown_text': self.get_countdown(next_iqamah_time),
@@ -3487,7 +3542,7 @@ class IslamicBackground:
             else:
                 show_arabic = bool(force_show_arabic)
             return {
-                'prefix_text': 'الإقامة القادمة \u200f:\u200f ' if show_arabic else 'Next iqamah: ',
+                'prefix_text': 'الإقامة القادمة \u200f:\u200f ' if show_arabic else 'Next Iqamah: ',
                 'name_text': '---',
                 'in_text': ' خلال ' if show_arabic else ' in ',
                 'countdown_text': '--:--:--',
@@ -3660,7 +3715,7 @@ class IslamicBackground:
         right_font = ('Arial', self.fs(38, 20), 'bold')
         current_time_text = self.get_current_time().strftime('%I:%M:%S %p')
         iqamah_countdown_text = self._get_prayer_iqamah_countdown(prayer_display)
-        right_line_text = f"{prayer_display.upper()} iqamah in {iqamah_countdown_text}"
+        right_line_text = f"{prayer_display.upper()} Iqamah in {iqamah_countdown_text}"
 
         theme_name = self.get_theme_name()
         if theme_name == 'elegent_v2':
@@ -4313,7 +4368,7 @@ class IslamicBackground:
             is_friday_khutbah = (self.current_prayer_name == 'Jummah' and self.get_current_date().weekday() == 4)
             friday_hadith_text = ''
             friday_hadith_text_en = ''
-            prayer_line_text = f"{self.current_prayer_name.upper()} iqamah in"
+            prayer_line_text = f"{self.current_prayer_name.upper()} Iqamah in"
             instruction_line_text = 'Please put your cell phone on silent mode'
             instruction_font_size = self.fs(68, 32)
             iqamah_change_notice = self.get_iqamah_change_notice_text()
@@ -4354,7 +4409,7 @@ class IslamicBackground:
             # Iqamah change notice (between countdown and phone notice)
             if iqamah_change_notice:
                 prayer_display = self.current_prayer_name or ''
-                left_text = f'{prayer_display} iqamah changes to '
+                left_text = f'{prayer_display} Iqamah changes to '
                 right_text = f'{iqamah_change_notice} TOMORROW'
                 notice_font_size = self.fs(78, 36)
                 min_notice_font_size = self.fs(50, 24)
@@ -4394,6 +4449,13 @@ class IslamicBackground:
                     tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
                 )
                 self.iqamah_overlay_ids.append(change_notice_right)
+
+                # Respect the configured on/off timing only.
+                for item_id in self.canvas.find_withtag('iqamah_overlay_change_notice'):
+                    try:
+                        self.canvas.itemconfig(item_id, state='normal' if self.should_show_iqamah_change_label() else 'hidden')
+                    except:
+                        pass
 
             # Cell phone notice (black and bigger)
             instruction_x = width / 2
@@ -5302,6 +5364,15 @@ class IslamicBackground:
 
             countdown = self.get_iqamah_countdown()
 
+            change_notice_ids = self.canvas.find_withtag('iqamah_overlay_change_notice')
+            should_show_change_notice = self.should_show_iqamah_change_label()
+            for item_id in change_notice_ids:
+                state = 'normal' if should_show_change_notice else 'hidden'
+                try:
+                    self.canvas.itemconfig(item_id, state=state)
+                except:
+                    pass
+
             # Hard transition: never remain on countdown overlay at 00:00
             if self.iqamah_overlay_mode == 'countdown' and countdown == '00:00':
                 is_friday_jummah = (
@@ -5359,6 +5430,23 @@ class IslamicBackground:
 
         except Exception as e:
             self._log(f"ERROR in update_iqamah_overlay_countdown: {e}")
+
+    def should_show_iqamah_change_label(self):
+        """Return whether the one-day iqamah change label should be visible."""
+        try:
+            interval_seconds = int(self.config.get('iqamahchangelabel', self.iqamah_change_label_every_seconds))
+            duration_seconds = int(self.config.get('iqamahchangelabelduration', self.iqamah_change_label_duration_seconds))
+            interval_seconds = max(1, interval_seconds)
+            duration_seconds = max(0, duration_seconds)
+            duration_seconds = min(duration_seconds, interval_seconds)
+            if duration_seconds <= 0:
+                return False
+            current_time = self.get_current_time()
+            now_dt = datetime.combine(self.get_current_date(), current_time)
+            seconds_into_cycle = int(now_dt.timestamp()) % interval_seconds
+            return seconds_into_cycle < duration_seconds
+        except Exception:
+            return False
 
     def get_iqamah_change_notice_text(self):
         """Return one-day-before iqamah change notice for current prayer, else None."""
@@ -5895,10 +5983,74 @@ class IslamicBackground:
         except:
             pass
 
+    def get_islamic_event_timeline(self):
+        """Return a compact annual Islamic event timeline with completion state."""
+        today = self.get_current_date()
+        events = [
+            {'name': 'Muharram', 'abbr': 'M', 'date': datetime(2025, 6, 26).date(), 'icon': '☪'},
+            {'name': 'Ramadan', 'abbr': 'R', 'date': datetime(2026, 2, 18).date(), 'icon': '☾'},
+            {'name': 'Eid Fitr', 'abbr': 'E', 'date': datetime(2026, 3, 30).date(), 'icon': '✦'},
+            {'name': 'Eid Adha', 'abbr': 'A', 'date': datetime(2026, 5, 27).date(), 'icon': '✧'},
+            {'name': 'Islamic New Year', 'abbr': 'N', 'date': datetime(2026, 6, 25).date(), 'icon': '◌'},
+        ]
+
+        for event in events:
+            event['completed'] = event['date'] <= today
+
+        active_index = None
+        for idx, event in enumerate(events):
+            if not event['completed']:
+                active_index = idx
+                break
+        if active_index is None:
+            active_index = len(events) - 1
+
+        for idx, event in enumerate(events):
+            event['is_active'] = idx == active_index
+            event['is_future'] = idx > active_index
+            event['is_done'] = event['completed']
+
+        return events
+
+    def draw_islamic_events_timeline(self, width, height, weather_x_start=None, weather_y_start=None, weather_total_w=None, weather_h=None):
+        """Draw a minimal Islamic event strip under the weather cards without the circular nodes."""
+        events = self.get_islamic_event_timeline()
+        if not events:
+            return
+
+        if weather_x_start is not None and weather_total_w is not None:
+            start_x = weather_x_start + 20
+            end_x = weather_x_start + weather_total_w - 20
+            base_y = weather_y_start + weather_h + self.us(18, 10)
+        else:
+            start_x = self.us(40, 20)
+            end_x = width - self.us(40, 20)
+            base_y = height - self.us(110, 65)
+
+        completed_count = sum(1 for event in events if event['is_done'])
+        active_count = sum(1 for event in events if event['is_active'])
+        line_width = max(1, end_x - start_x)
+
+        # Minimal horizontal line with subtle completion color progression.
+        self.canvas.create_line(
+            start_x, base_y, end_x, base_y,
+            fill='#dfe7f3', width=self.us(5, 3), cap='round', tags='islamic_timeline'
+        )
+
+        for idx, event in enumerate(events):
+            x = start_x + (line_width * idx / max(1, len(events) - 1))
+            color = '#2dc979' if event['is_done'] else ('#33bfdc' if event['is_active'] else '#edf1f6')
+            self.canvas.create_oval(
+                x - self.us(4, 2), base_y - self.us(4, 2), x + self.us(4, 2), base_y + self.us(4, 2),
+                fill=color, outline='', tags='islamic_timeline'
+            )
+
+        # Optional small text label if desired, but currently removed to keep it clean.
+
     def draw_weather(self, width, height):
         """Draw weather as 3 compact horizontal cards under current time."""
         if not self.weather_data:
-            return
+            return None
 
         card_h = self.us(118, 62)
         card_w = self.us(272, 150)
@@ -5954,7 +6106,12 @@ class IslamicBackground:
             right_area_w = max(self.us(320, 200), width - right_area_x1 - self.us(34, 18))
             right_center_x = right_area_x1 + (right_area_w / 2)
             x_start = right_center_x - (total_w / 2)
-            y_start = self.jummah_box_y + self.jummah_box_h + self.us(12, 8) + weather_y_offset
+            jummah_box_y = getattr(self, 'jummah_box_y', None)
+            jummah_box_h = getattr(self, 'jummah_box_h', None)
+            if jummah_box_y is not None and jummah_box_h is not None:
+                y_start = jummah_box_y + jummah_box_h + self.us(12, 8) + weather_y_offset
+            else:
+                y_start = height - card_h - self.us(45, 22) + weather_y_offset
             min_x = right_area_x1 + self.us(4, 2)
             max_x = right_area_x1 + right_area_w - total_w - self.us(4, 2)
             x_start = max(min_x, min(max_x, x_start))
@@ -6113,6 +6270,8 @@ class IslamicBackground:
                 anchor='e',
                 tags='weather_row'
             )
+
+        return x_start, y_start, total_w, card_h
 
     def _set_weather_group_state(self, tag, state):
         """Set all canvas items with given tag to state ('normal' or 'hidden')."""

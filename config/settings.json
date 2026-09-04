@@ -42,6 +42,8 @@
   "redribbonhide": 45,
   "arabicchangeevery": 30,
   "arabicnameduration": 10,
+  "iqamahchangelabel": 30,
+  "iqamahchangelabelduration": 10,
   "Eid Salah": "Eid Al Fitr salah is at 9:00 AM on Friday March 27 2026\nEid Al-Adha Takbeerat starts at 9:00 AM and salah is at 9:30 AM on Wednesday May 27 2026",
   "overwritebglog": "no",
   "prayerboxopacity": 75,
