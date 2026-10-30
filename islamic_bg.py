@@ -661,6 +661,9 @@ class IslamicBackground:
                     pass
                 self._weather_cycle_after_id = None
             if self.should_show_periodic_background_image():
+                # Prayer names are not on the canvas now; drop stale specs so they are not redrawn over the image.
+                self.salah_name_specs = []
+                self.salah_name_canvas_ids = []
                 width = self.canvas.winfo_width()
                 height = self.canvas.winfo_height()
                 if not self.draw_background_image(width, height):
@@ -2918,8 +2921,6 @@ class IslamicBackground:
             prayers_list = ['Fajr', 'Duhr', 'Asr', 'Maghrib', 'Isha']
 
             for prayer in prayers_list:
-                if prayer == 'Maghrib':
-                    continue
                 today_iqama = today_prayers.get(f'{prayer}Iqama', '--') if today_prayers else '--'
                 tomorrow_iqama = tomorrow_prayers.get(f'{prayer}Iqama', '--') if tomorrow_prayers else '--'
 
@@ -2929,6 +2930,22 @@ class IslamicBackground:
                         'tomorrow': tomorrow_iqama,
                         'today_iqama': today_iqama,
                         'tomorrow_iqama': tomorrow_iqama
+                    }
+
+            # Shrouq has no Iqamah, so compare sunrise times for the same DST shift.
+            today_sunrise, _ = self.resolve_sunrise_time(today_prayers or {})
+            tomorrow_sunrise, _ = self.resolve_sunrise_time(tomorrow_prayers or {})
+            if today_sunrise != '--' and tomorrow_sunrise != '--':
+                if 'AM' not in today_sunrise and 'PM' not in today_sunrise:
+                    today_sunrise = today_sunrise + ' AM'
+                if 'AM' not in tomorrow_sunrise and 'PM' not in tomorrow_sunrise:
+                    tomorrow_sunrise = tomorrow_sunrise + ' AM'
+                if today_sunrise != tomorrow_sunrise:
+                    self.changing_prayers['Shrouq'] = {
+                        'today': today_sunrise,
+                        'tomorrow': tomorrow_sunrise,
+                        'today_iqama': today_sunrise,
+                        'tomorrow_iqama': tomorrow_sunrise
                     }
     
     def check_upcoming_changes(self):
@@ -3451,6 +3468,25 @@ class IslamicBackground:
                         'in_text': localized_phrase(' Iqamah in ', ' خلال '),
                         'countdown_text': iqamah_countdown_text,
                         'rtl': rtl_mode
+                    }
+
+            # Last 2 minutes before an Athan: the countdown box counts down to Athan,
+            # then returns to the Iqamah countdown once the Athan time is reached.
+            today_date = self.get_current_date()
+            now_full = datetime.combine(today_date, now)
+            for athan_key in ('Fajr', 'Duhr', 'Asr', 'Maghrib', 'Isha'):
+                upcoming_athan = self.parse_time(prayers_data.get(f'{athan_key}Athan', ''))
+                if not upcoming_athan:
+                    continue
+                secs_to_athan = (datetime.combine(today_date, upcoming_athan) - now_full).total_seconds()
+                if 0 < secs_to_athan <= 120:
+                    return {
+                        'prefix_text': localized_phrase('', 'أذان '),
+                        'name_text': localized_prayer_name(athan_key),
+                        'in_text': localized_phrase(' Athan in ', ' خلال '),
+                        'countdown_text': self.get_countdown(upcoming_athan),
+                        'rtl': rtl_mode,
+                        'athan_alert': True
                     }
 
             _, sunrise_time = self.resolve_sunrise_time(prayers_data)
@@ -3994,7 +4030,9 @@ class IslamicBackground:
             self._np_rtl = bool(self._np_new_data.get('rtl', False))
             self.redraw_full_display()
             return
-        self.redraw_full_display()
+        # Skip per-frame redraws while the periodic background image is showing.
+        if not self.should_show_periodic_background_image():
+            self.redraw_full_display()
         self._np_anim_ticker_id = self.root.after(40, self._np_tick)
 
     def _compute_next_prayer_line_layout(self, prefix_text, name_text, in_text, countdown_text, rtl_mode):
@@ -4069,6 +4107,13 @@ class IslamicBackground:
 
                     blinking_prayer, blink_visible = self.get_athan_blink_state(prayers_data)
 
+                    # Redraw when the Iqamah-based Next badge moves (after an Iqamah passes).
+                    if (not self.iqamah_overlay_visible and not self._is_full_redraw
+                            and self.get_theme_name() == 'elegent_v2'):
+                        last_next_key = getattr(self, '_last_rendered_next_badge_key', None)
+                        if last_next_key is not None and self.get_next_iqamah_prayer_key(prayers_data) != last_next_key:
+                            self.redraw_full_display()
+
                     if current_prayer_now != self.last_rendered_current_prayer:
                         self.last_rendered_current_prayer = current_prayer_now
                         self.update_prayer_box_highlight_states(current_prayer_now, blinking_prayer, blink_visible)
@@ -4087,6 +4132,11 @@ class IslamicBackground:
                     in_text = display_data['in_text']
                     countdown_text = display_data['countdown_text']
                     rtl_mode = bool(display_data.get('rtl', False))
+
+                    # Redraw so the box background switches to/from red with the Athan countdown.
+                    if (bool(display_data.get('athan_alert', False)) != getattr(self, '_np_last_athan_alert', False)
+                            and not self.iqamah_overlay_visible and not self._is_full_redraw):
+                        self.redraw_full_display()
 
                     if self._np_anim_active:
                         # Keep live countdown current in the animation target
@@ -4449,13 +4499,6 @@ class IslamicBackground:
                     tags=('iqamah_overlay', 'iqamah_overlay_change_notice')
                 )
                 self.iqamah_overlay_ids.append(change_notice_right)
-
-                # Respect the configured on/off timing only.
-                for item_id in self.canvas.find_withtag('iqamah_overlay_change_notice'):
-                    try:
-                        self.canvas.itemconfig(item_id, state='normal' if self.should_show_iqamah_change_label() else 'hidden')
-                    except:
-                        pass
 
             # Cell phone notice (black and bigger)
             instruction_x = width / 2
@@ -5364,12 +5407,10 @@ class IslamicBackground:
 
             countdown = self.get_iqamah_countdown()
 
-            change_notice_ids = self.canvas.find_withtag('iqamah_overlay_change_notice')
-            should_show_change_notice = self.should_show_iqamah_change_label()
-            for item_id in change_notice_ids:
-                state = 'normal' if should_show_change_notice else 'hidden'
+            # Iqamah change notice stays visible for the whole countdown (no blinking).
+            for item_id in self.canvas.find_withtag('iqamah_overlay_change_notice'):
                 try:
-                    self.canvas.itemconfig(item_id, state=state)
+                    self.canvas.itemconfig(item_id, state='normal')
                 except:
                     pass
 
@@ -6498,7 +6539,8 @@ class IslamicBackground:
                     box_width,
                     next_prayer_box_h,
                     sunrise_time,
-                    is_current=is_shrouq_current
+                    is_current=is_shrouq_current,
+                    tomorrow_sunrise=(self.changing_prayers.get('Shrouq') or {}).get('tomorrow_iqama')
                 )
                 if shrouq_shape_id:
                     self.prayer_box_shape_ids['Shrouq'] = shrouq_shape_id
@@ -6711,15 +6753,9 @@ class IslamicBackground:
         if not next_prayer_key:
             next_prayer_key = 'Duhr' if (is_friday and next_prayer_name == 'Jummah') else next_prayer_name
 
-        # When countdown is intentionally held on Shrouq, keep a visible Next badge
-        # on the following prayer row instead of colliding with Current on Shrouq.
-        if next_prayer_key == current_prayer:
-            order = ['Fajr', 'Shrouq', 'Jummah', 'Duhr', 'Asr', 'Maghrib', 'Isha'] if is_friday else ['Fajr', 'Shrouq', 'Duhr', 'Asr', 'Maghrib', 'Isha']
-            try:
-                idx = order.index(current_prayer)
-                next_prayer_key = order[(idx + 1) % len(order)]
-            except Exception:
-                pass
+        # Next badge follows the upcoming Iqamah, not Athan: it stays on a prayer
+        # through its Athan->Iqamah window and moves only after the Iqamah passes.
+        self._last_rendered_next_badge_key = next_prayer_key
 
         self.prayer_box_shape_ids = {}
         self.prayer_box_bounds = {}
@@ -6938,11 +6974,16 @@ class IslamicBackground:
                 arabic_time_text = arabic_time_text.replace(' AM', ' صباحًا').replace(' PM', ' مساءً')
                 arabic_time_text = arabic_time_text.replace(' am', ' صباحًا').replace(' pm', ' مساءً')
                 if show_arabic_name:
-                    full_overlay_text = self._prepare_canvas_rtl_text(
-                        f"تتغيّر إقامة صلاة {arabic} إلى الساعة {arabic_time_text} غدًا"
-                    )
+                    if key == 'Shrouq':
+                        full_overlay_text = self._prepare_canvas_rtl_text(
+                            f"يتغيّر وقت الشروق إلى الساعة {arabic_time_text} غدًا"
+                        )
+                    else:
+                        full_overlay_text = self._prepare_canvas_rtl_text(
+                            f"تتغيّر إقامة صلاة {arabic} إلى الساعة {arabic_time_text} غدًا"
+                        )
                 else:
-                    prefix_text = f'{display_name} Iqamah changes to '
+                    prefix_text = f'{display_name} changes to ' if key == 'Shrouq' else f'{display_name} Iqamah changes to '
                     time_text = tomorrow_iqamah_overlay
                     suffix_text = ' Tomorrow'
 
@@ -7873,7 +7914,7 @@ class IslamicBackground:
         
         return box_shape_id
     
-    def draw_shouruq_box(self, x, y, width, height, sunrise_time, is_current=False):
+    def draw_shouruq_box(self, x, y, width, height, sunrise_time, is_current=False, tomorrow_sunrise=None):
         """Draw Shouruq (Sunrise) box"""
         palette = self.get_theme_palette()
         if is_current:
@@ -7939,6 +7980,46 @@ class IslamicBackground:
             font=('Arial', self.fs(34, 18), 'bold'),
             fill=palette['shrouq_note_text']
         )
+
+        # Full-box change notice when sunrise changes tomorrow (daylight saving)
+        if tomorrow_sunrise:
+            ribbon_state = 'normal' if self.ribbon_visible else 'hidden'
+            notice_pad = self.us(4, 2)
+            notice_bg = self.draw_alpha_fill(
+                x + notice_pad, y + notice_pad,
+                width - notice_pad * 2, height - notice_pad * 2,
+                fill_color='white',
+                opacity_percent=97,
+                radius=corner_radius,
+                outline_color='#ff0000',
+                outline_width=self.us(3, 2)
+            )
+            self.canvas.itemconfigure(notice_bg, state=ribbon_state, tags=('prayer_change_ribbon', 'prayer_change_ribbon_bg'))
+            self.canvas.create_text(
+                x + width/2, y + self.us(42, 20),
+                text='SHROUQ',
+                font=('Arial', self.fs(42, 21), 'bold'),
+                fill='black',
+                tags=('prayer_change_ribbon',),
+                state=ribbon_state
+            )
+            self.draw_time_text_with_meridiem(
+                x + width/2, y + self.us(126, 60),
+                tomorrow_sunrise,
+                main_size=self.fs(60, 30),
+                suffix_size=self.fs(24, 12),
+                color='#ff0000',
+                tags=('prayer_change_ribbon',),
+                state=ribbon_state
+            )
+            self.canvas.create_text(
+                x + width/2, y + height - self.us(40, 20),
+                text='TOMORROW',
+                font=('Arial', self.fs(34, 18), 'bold'),
+                fill='#ff0000',
+                tags=('prayer_change_ribbon',),
+                state=ribbon_state
+            )
 
         return box_shape_id
 
@@ -8101,6 +8182,20 @@ class IslamicBackground:
         prefix_font = ('Arial', prefix_size, 'bold')
         panel_center_x = x + self.us(24, 12)
         panel_x1 = panel_center_x - (panel_width / 2)
+
+        # Red box with white text while counting down to Athan.
+        athan_alert = bool(display_data.get('athan_alert', False))
+        self._np_last_athan_alert = athan_alert
+        if athan_alert:
+            palette = dict(palette)
+            palette.update({
+                'next_panel_fill': '#c62828',
+                'next_panel_outline': '#8e0000',
+                'next_prefix_text': 'white',
+                'next_name_text': 'white',
+                'next_in_text': 'white',
+                'next_countdown_text': 'white',
+            })
 
         self.next_prayer_panel_id = self.draw_rounded_rectangle(
             panel_x1, panel_y1, panel_width, panel_height, self.next_prayer_panel_radius,
@@ -8374,6 +8469,18 @@ class IslamicBackground:
         """Schedule the prayer time toggle every 15 minutes"""
         self.update_prayer_time_toggle()
 
+    def _redraw_salah_names_for_transition(self):
+        """Redraw prayer names for the Arabic/English transition unless something else owns the canvas."""
+        if self.iqamah_overlay_visible:
+            return
+        # While the periodic background image is shown, no prayer boxes are on the canvas.
+        # Redrawing here would flash names over the image or wipe/redraw it every frame.
+        if self.should_show_periodic_background_image():
+            return
+        if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
+            return
+        self.redraw_full_display()
+
     def _start_salah_name_transition(self, target_show_arabic):
         """Start a short animated transition between English and Arabic prayer names."""
         target_show_arabic = bool(target_show_arabic)
@@ -8402,11 +8509,7 @@ class IslamicBackground:
 
         self.salah_name_transition_active = True
         self.salah_name_transition_progress = 0.0
-        if not self.iqamah_overlay_visible:
-            if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
-                pass
-            else:
-                self.redraw_full_display()
+        self._redraw_salah_names_for_transition()
         self.salah_name_transition_after_id = self.root.after(
             self.salah_name_transition_tick_ms,
             self._tick_salah_name_transition
@@ -8417,11 +8520,7 @@ class IslamicBackground:
         step = self.salah_name_transition_tick_ms / max(1, self.salah_name_transition_duration_ms)
         self.salah_name_transition_progress = min(1.0, self.salah_name_transition_progress + step)
 
-        if not self.iqamah_overlay_visible:
-            if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
-                pass
-            else:
-                self.redraw_full_display()
+        self._redraw_salah_names_for_transition()
 
         if self.salah_name_transition_progress >= 1.0:
             self._finish_salah_name_transition()
@@ -8440,11 +8539,7 @@ class IslamicBackground:
         self.salah_names_show_arabic = self.salah_name_transition_target_arabic
         self._last_salah_name_arabic_state = self.salah_names_show_arabic
 
-        if not self.iqamah_overlay_visible:
-            if self.get_theme_name() in ('elegent', 'elegent_v2') and self._redraw_salah_name_texts_only():
-                pass
-            else:
-                self.redraw_full_display()
+        self._redraw_salah_names_for_transition()
 
     def update_salah_name_rotation_state(self):
         """Show Arabic prayer names briefly on a configurable cadence, otherwise default to English."""
