@@ -1,4 +1,4 @@
 Welcome to RCIC @color gold
 Support your Masjid - donate today 
 Please maintain and respect the sanctity 
-Please keep your voice low red
+Please keep your voice low @color red
