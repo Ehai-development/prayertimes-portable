@@ -1,8 +1,8 @@
 Welcome to RCIC @color gold
 Support your Masjid - donate today 
 Please maintain and respect the sanctity 
-SubhanAllah (سُبْحَانَ ٱللَّهِ) 
-Alhamdulillah (ٱلْحَمْدُ لِلَّهِ)
-La ilaha illallah (لَا إِلَٰهَ إِلَّا ٱللَّهُ)
-Allahu Akbar (ٱللَّهُ أَكْبَرُ)
-As-Salatu Wassalamu Alaika Ya Rasool Allah (الصَّلَاةُ وَالسَّلَامُ عَلَيْكَ يَا رَسُولَ اللَّهِ)
+SubhanAllah (سُبْحَانَ ٱللَّهِ) @color yellow
+Alhamdulillah (ٱلْحَمْدُ لِلَّهِ) @color yellow
+La ilaha illallah (لَا إِلَٰهَ إِلَّا ٱللَّهُ) @color yellow
+Allahu Akbar (ٱللَّهُ أَكْبَرُ) @color yellow
+As-Salatu Wassalamu Alaika Ya Rasool Allah (الصَّلَاةُ وَالسَّلَامُ عَلَيْكَ يَا رَسُولَ اللَّهِ) @color yellow
