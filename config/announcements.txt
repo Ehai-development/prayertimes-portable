@@ -6,3 +6,4 @@ Alhamdulillah (ٱلْحَمْدُ لِلَّهِ) @color yellow
 La ilaha illallah (لَا إِلَٰهَ إِلَّا ٱللَّهُ) @color yellow
 Allahu Akbar (ٱللَّهُ أَكْبَرُ) @color yellow
 As-Salatu Wassalamu Alaika Ya Rasool Allah (الصَّلَاةُ وَالسَّلَامُ عَلَيْكَ يَا رَسُولَ اللَّهِ) @color yellow
+The White Days (Ayyam al-Beed) fasting: November 23, 24 & 25 (13th, 14th & 15th of Jumada al-Akhirah). May Allah accept our fasting @ Black
